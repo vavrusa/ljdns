@@ -5,9 +5,9 @@ PREFIX_LMOD ?= $(PREFIX)/share/lua/$(ABIVER)
 INSTALL ?= install
 
 # Scripts and extras
-OBJS := kdns rrparser
+OBJS := kdns
 LIBS := $(addsuffix .lua,$(OBJS))
-EXTRA := kdns/utils.lua
+EXTRA := kdns/utils.lua kdns/io.lua kdns/rrparser.lua
 
 # Rules
 all: check

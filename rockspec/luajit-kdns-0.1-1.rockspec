@@ -11,7 +11,9 @@ description = {
    license = "BSD"
 }
 dependencies = {
-   "lua >= 5.1", -- "luajit >= 2.0.0"
+   "lua >= 5.1",
+   "luasocket >= 2.0.1",
+   "ldoc >= 1.1.0",
 }
 external_dependencies = {
     LIBZSCANNER = {
