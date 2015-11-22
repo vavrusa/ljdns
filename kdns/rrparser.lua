@@ -138,21 +138,17 @@ ffi.metatype( zs_scanner_t, {
 })
 
 -- Module API
-local zonefile = {}
-
-function zonefile.parser(on_record, on_error)
-	return zs_scanner_t(on_record, on_error)
-end
-
-function zonefile.parse_file(file)
-	local records = {}
-	local context = zonefile.parser(function (parser)
-		table.insert(records, parser:current_rr())
-	end)
-	if context:parse_file(file) ~= 0 then
-		return nil
-	end
-	return records
-end
-
-return zonefile
+local rrparser = {
+	new = zs_scanner_t,
+	parse_file = function (path)
+		local records = {}
+		local parser = zs_scanner_t(function (parser)
+			table.insert(records, parser:current_rr())
+		end)
+		if parser:parse_file(path) ~= 0 then
+			return nil
+		end
+		return records
+	end,
+}
+return rrparser
