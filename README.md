@@ -213,6 +213,22 @@ pkt:begin(kdns.section.ANSWER) -- WRONG, throws error
 local wire = pkt:towire()
 ```
 
+The EDNS OPT is a special type of RR, because it uses its fields for a different purpose. The library treats it as a RR with only minimal hand-holding, but provides a handful of convenience functions. It also **MUST** be the last RR in the ADDITIONAL section (with the exception of TSIG). This is where you can set maximum UDP payload and `DO` bit to signalize DNSSEC OK.
+
+```lua
+-- Create OPT RR (optional version, payload)
+local opt = kdns.edns.rrset(0, 4096)
+-- Set "DNSSEC OK"
+kdns.edns.dobit(opt, true)
+-- Add EDNS option (numeric code, binary string of data)
+kdns.edns.option(opt, 0x5, 'mydata')
+-- Enter ADDITIONAL section, the OPT must be last in the packet
+pkt:begin(kdns.section.ADDITIONAL)
+-- Write as any other packet
+pkt:put(opt)
+print(tostring(pkt))
+```
+
 As it's an API over binary string, it can be used for parsing packet from wire format as well.
 
 ```lua
@@ -231,10 +247,14 @@ local records = answer:section(kdns.section.ANSWER)
 for i, rr in ipairs(records) do
 	print(rr.owner, rr.ttl, rr.class, rr.type, rr.rdata)
 end
+-- Check EDNS OPT RR
+if pkt.opt then
+	local rr = pkt.opt
+	print(kdns.edns.version(rr), kdns.edns.dobit(rr))
+	-- Check if it contains EDNS OPT code
+	if kdns.edns.option(rr, 0x05) then print('yes, has 0x5 option') end
+end
 ```
-
-TODO: OPT and EDNS
-------------------
 
 TODO: TSIG
 ----------

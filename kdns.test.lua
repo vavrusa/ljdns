@@ -52,6 +52,18 @@ assert(rrset:rdata(0) == '\4test\0')
 collectgarbage()
 print('[ OK ] kdns.rrset')
 
+-- Test OPT RR
+local opt = kdns.edns.rrset(0, 4096)
+assert(opt ~= nil)
+assert(kdns.edns.version(opt) == 0)
+assert(kdns.edns.payload(opt) == 4096)
+assert(kdns.edns.dobit(opt) == false)
+assert(kdns.edns.dobit(opt, true) == true)
+assert(kdns.edns.option(opt, 0x05) == false)
+assert(kdns.edns.option(opt, 0x05, 'rawraw') == true)
+collectgarbage()
+print('[ OK ] kdns.edns')
+
 -- Test packet writing
 local pkt = kdns.packet(512)
 assert(pkt ~= nil)
@@ -67,9 +79,12 @@ assert(pkt:id(1234) == 1234)
 assert(pkt:question('\4test', kdns.type.SOA))
 assert(pkt:begin(kdns.section.ANSWER))
 assert(pkt:put(rrset) == true)
+rrset = nil
 collectgarbage() -- Must keep reference to RR
 assert(pkt:begin(kdns.section.ADDITIONAL) == 0)
 assert(pkt:put(kdns.rrset('\3com', kdns.type.A):add(kdns.rdata.a('1.2.3.4'), 3600)) == true)
+assert(pkt:put(opt) == true)
+edns = nil
 collectgarbage() -- Must keep reference to RR
 assert(pcall(function() pkt:begin(kdns.section.ANSWER) end) == false)
 print(pkt)
@@ -96,6 +111,9 @@ copy = pkt:copy()
 collectgarbage() -- Must collect previous copy
 assert(copy ~= pkt)
 assert(tostring(copy) == tostring(pkt))
+copy = nil
+pkt = nil
+collectgarbage()
 print('[ OK ] kdns.packet.read')
 
 -- Test RR parser
@@ -124,4 +142,5 @@ rc = parser:read("foo. IN 3600 NS bar.\n")
 assert(rc == 0)
 assert(parser.error_code == 0)
 print('[ OK ] kdns.rrparser')
+collectgarbage()
 print('[ OK ] kdns')

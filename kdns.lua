@@ -171,14 +171,19 @@ bool knot_dname_in(const knot_dname_t *domain, const knot_dname_t *sub);
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
 uint8_t *knot_rdata_data(const knot_rdata_t *rr);
-size_t knot_rdata_array_size(uint16_t size);
-size_t knot_rdataset_size(const knot_rdataset_t *rrs);
 knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
+void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
 uint32_t knot_rrset_ttl(const knot_rrset_t *rrset);
 int knot_rrset_txt_dump(const knot_rrset_t *rrset, char *dst, size_t maxlen, const knot_dump_style_t *style);
 int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);
 knot_rrset_t *knot_rrset_new(const knot_dname_t *owner, uint16_t type, uint16_t rclass, void *mm);
+knot_rrset_t *knot_rrset_copy(const knot_rrset_t *src, void *mm);
 void knot_rrset_free(knot_rrset_t **rrset, void *mm);
+/* opt rr */
+uint8_t knot_edns_get_version(const knot_rrset_t *opt_rr);
+void knot_edns_set_version(knot_rrset_t *opt_rr, uint8_t version);
+int knot_edns_add_option(knot_rrset_t *opt_rr, uint16_t code, uint16_t length, const uint8_t *data, void *mm);
+bool knot_edns_has_option(const knot_rrset_t *opt_rr, uint16_t code);
 /* packet */
 const knot_dname_t *knot_pkt_qname(const knot_pkt_t *pkt);
 uint16_t knot_pkt_qtype(const knot_pkt_t *pkt);
@@ -209,6 +214,11 @@ local const_type = ffi.new('struct rr_type')
 local const_section = ffi.new('struct pkt_section')
 local const_opcode = ffi.new('struct pkt_opcode')
 local const_rcode = ffi.new('struct pkt_rcode')
+
+-- Meta tables for catchall
+local meta_nokey = { __index = function (t, k) return nil end }
+ffi.metatype('struct rr_class', meta_nokey)
+ffi.metatype('struct rr_type', meta_nokey)
 
 -- Constant tables
 local const_class_str = {
@@ -292,20 +302,23 @@ local rdata = {
 }
 
 -- Metatype for RR set
-local function rrset_free(rr) knot.knot_rrset_free(ffi.new("knot_rrset_t *[1]", rr), nil) end
+local function rrset_free(rr)
+	knot.knot_rrset_free(ffi.new("knot_rrset_t *[1]", rr), nil)
+end
 local rrset_buflen = (64 + 1) * 1024
 local rrset_buf = ffi.new(i8_vla, rrset_buflen)
 local knot_rrset_t = ffi.typeof('knot_rrset_t')
 ffi.metatype( knot_rrset_t, {
 	__new = function (ct, owner, type, class)
 		if class == nil then class = const_class.IN end
-		return ffi.gc(knot.knot_rrset_new(knot_dname_t(owner), type, class, nil), rrset_free)
+		if not ffi.istype(knot_dname_t, owner) then owner = knot_dname_t(owner) end
+		return ffi.gc(knot.knot_rrset_new(owner, type, class, nil), rrset_free)
 	end,
 	__len = function(rr) return rr.rr.count end,
 	__tostring = function(rr)
 		local ret = 0
 		local style = knot.KNOT_DUMP_STYLE_DEFAULT
-		if #rr > 0 then
+		if rr.rr.count > 0 then
 			ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, style)
 			if ret < 0 then return nil end
 			return ffi.string(rrset_buf)
@@ -317,8 +330,14 @@ ffi.metatype( knot_rrset_t, {
 		owner = function(rr) return rr._owner end,
 		type = function(rr) return rr._type end,
 		class = function(rr) return rr._class end,
-		ttl = function(rr)
-			return rr.rr.count > 0 and tonumber(knot.knot_rrset_ttl(rr)) or 0
+		ttl = function(rr, ttl)
+			if rr.rr.count > 0 then
+				if ttl ~= nil then
+					local rd = knot.knot_rdataset_at(rr.rr, 0)
+					knot.knot_rdata_set_ttl(rd, ttl)
+				end
+				return tonumber(knot.knot_rrset_ttl(rr))
+			else return 0 end
 		end,
 		rdata = function(rr, i)
 			local rdata = knot.knot_rdataset_at(rr.rr, i)
@@ -336,11 +355,44 @@ ffi.metatype( knot_rrset_t, {
 			local ret = knot.knot_rrset_add_rdata(rr, rdata, #rdata, ttl, nil)
 			return ret == 0 and rr or nil
 		end,
+		copy = function (rr)
+			return ffi.gc(knot.knot_rrset_copy(rr, nil), rrset_free)
+		end,
 	},
 	__newindex = function (rr, k, v) error("rrset is immutable") end,
 })
 
-
+-- Functions for OPT RR
+local function edns_version(rr, val)
+	if val ~= nil then knot.knot_edns_set_version(rr, val) end
+	return knot.knot_edns_get_version(rr)
+end
+local function edns_payload(rr, val)
+	if val ~= nil then rr._class = val end
+	return rr:class()
+end
+local function edns_do(rr, val)
+	local ttl = rr:ttl()
+	if val ~= nil then
+		ttl = bor(ttl, val and 0x8000 or 0x00)
+		rr:ttl(ttl)
+	end
+	return band(ttl, 0x8000) ~= 0
+end
+local function edns_option(rr, code, val)
+	if val ~= nil then knot.knot_edns_add_option(rr, code, #val, val, nil) end
+	return knot.knot_edns_has_option(rr, code)
+end
+local function edns_t(version, payload)
+	if version == nil then version = 0 end
+	if payload == nil then payload = 4096 end
+	local rr = knot_rrset_t('\0', const_type.OPT, payload)
+	if rr then
+		rr:add('', 0)
+		edns_version(rr, version)
+	end
+	return rr
+end
 
 -- Metatype for packet
 local knot_pkt_t = ffi.typeof('knot_pkt_t')
@@ -360,7 +412,9 @@ local function pkt_unref(pkt)
 		if v[1] == ffi.cast(void_p, pkt) then pkt_refs[i] = nil end
 	end
 end
-local function pkt_free(pkt) pkt_unref(pkt) knot.knot_pkt_free(ffi.new("knot_pkt_t *[1]", pkt)) end
+local function pkt_free(pkt)
+	knot.knot_pkt_free(ffi.new("knot_pkt_t *[1]", pkt))
+end
 ffi.metatype( knot_pkt_t, {
 	__new = function (ctype, size, wire)
 		if wire ~= nil then
@@ -380,9 +434,14 @@ ffi.metatype( knot_pkt_t, {
 		end
 		local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',
 			table.concat(flags, ' '), pkt:qdcount(), pkt:ancount(), pkt:nscount(), pkt:arcount())
-		local data = ''
+		local data = '\n'
+		if pkt.opt ~= nil then
+			local opt = pkt.opt
+			data = data..string.format(';; OPT PSEUDOSECTION:\n; EDNS: version: %d, flags:%s; udp: %d\n',
+				edns_version(opt), edns_do(opt) and ' do' or '', edns_payload(opt))
+		end
 		if pkt:qdcount() > 0 then
-			data = string.format(';; QUESTION\n;%s\t%s\t%s\n',
+			data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
 				tostring(knot_dname_t(pkt:qname())), const_type_str[pkt:qtype()], const_class_str[pkt:qclass()])
 		end
 		for i = const_section.ANSWER, const_section.ADDITIONAL do
@@ -391,7 +450,10 @@ ffi.metatype( knot_pkt_t, {
 				data = data..string.format(';; %s\n', const_section_str[i])
 				for j = 0, section.count - 1 do
 					local rrset = knot.knot_pkt_rr(section, j)
-					data = data..tostring(rrset)
+					local rrtype = rrset:type()
+					if rrtype ~= const_type.OPT and rrtype ~= const_type.TSIG then
+						data = data..tostring(rrset)
+					end
 				end
 			end
 		end
@@ -463,6 +525,7 @@ ffi.metatype( knot_pkt_t, {
 		put = function (pkt, rrset, noref)
 			-- Insertion loses track of rrset reference, reference it explicitly
 			if noref ~= true then pkt_ref(pkt, rrset) end
+			if rrset:type() == const_type.OPT then pkt.opt = rrset end
 			return knot.knot_pkt_put(pkt, 0, rrset, 0) == 0
 		end,
 		-- Packet manipulation
@@ -513,6 +576,13 @@ local kdns = {
 	rdata = rdata,
 	rrset = knot_rrset_t,
 	packet = knot_pkt_t,
+	edns = {
+		rrset = edns_t,
+		version = edns_version,
+		payload = edns_payload,
+		dobit = edns_do,
+		option = edns_option,
+	},
 	-- Metatypes
 	todname = function (udata) return ffi.cast('knot_dname_t *', udata) end,
 	torrset = function (udata) return ffi.cast('knot_rrset_t *', udata) end,
