@@ -316,15 +316,7 @@ ffi.metatype( knot_rrset_t, {
 	end,
 	__len = function(rr) return rr.rr.count end,
 	__tostring = function(rr)
-		local ret = 0
-		local style = knot.KNOT_DUMP_STYLE_DEFAULT
-		if rr.rr.count > 0 then
-			ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, style)
-			if ret < 0 then return nil end
-			return ffi.string(rrset_buf)
-		else
-			return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
-		end
+		return rr:tostring()
 	end,
 	__index = {
 		owner = function(rr) return rr._owner end,
@@ -357,6 +349,15 @@ ffi.metatype( knot_rrset_t, {
 		end,
 		copy = function (rr)
 			return ffi.gc(knot.knot_rrset_copy(rr, nil), rrset_free)
+		end,
+		tostring = function(rr)
+			if rr.rr.count > 0 then
+				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
+				if ret < 0 then return nil end
+				return ffi.string(rrset_buf)
+			else
+				return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
+			end
 		end,
 	},
 	__newindex = function (rr, k, v) error("rrset is immutable") end,
@@ -404,6 +405,23 @@ local function pkt_flags(pkt, idx, off, val)
 	pkt.wire[idx] = bor(pkt.wire[idx], (val) and off or 0x00)
 	return band(pkt.wire[idx], off) ~= 0
 end
+local function section_tostring(pkt, sec_id, plain)
+	local data = {}
+	local section = knot.knot_pkt_section(pkt, sec_id)
+	if section.count > 0 then
+		if plain ~= true then
+			table.insert(data, string.format(';; %s\n', const_section_str[sec_id]))
+		end
+		for j = 0, section.count - 1 do
+			local rrset = knot.knot_pkt_rr(section, j)
+			local rrtype = rrset:type()
+			if rrtype ~= const_type.OPT and rrtype ~= const_type.TSIG then
+				table.insert(data, rrset:tostring())
+			end
+		end
+	end
+	return table.concat(data, '')
+end
 -- RR insertion doesn't copy RR and is opaque to LuaJIT GC, we must track RRs that packet touched
 local pkt_refs = {}
 local function pkt_ref(pkt, rr) return table.insert(pkt_refs, {ffi.cast(void_p, pkt), rr}) end
@@ -426,38 +444,7 @@ ffi.metatype( knot_pkt_t, {
 		return pkt
 	end,
 	__tostring = function(pkt)
-		local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
-			const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
-		local flags = {}
-		for k,v in pairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
-			if(pkt[v](pkt)) then table.insert(flags, v) end
-		end
-		local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',
-			table.concat(flags, ' '), pkt:qdcount(), pkt:ancount(), pkt:nscount(), pkt:arcount())
-		local data = '\n'
-		if pkt.opt ~= nil then
-			local opt = pkt.opt
-			data = data..string.format(';; OPT PSEUDOSECTION:\n; EDNS: version: %d, flags:%s; udp: %d\n',
-				edns_version(opt), edns_do(opt) and ' do' or '', edns_payload(opt))
-		end
-		if pkt:qdcount() > 0 then
-			data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
-				tostring(knot_dname_t(pkt:qname())), const_type_str[pkt:qtype()], const_class_str[pkt:qclass()])
-		end
-		for i = const_section.ANSWER, const_section.ADDITIONAL do
-			local section = knot.knot_pkt_section(pkt, i)
-			if section.count > 0 then
-				data = data..string.format(';; %s\n', const_section_str[i])
-				for j = 0, section.count - 1 do
-					local rrset = knot.knot_pkt_rr(section, j)
-					local rrtype = rrset:type()
-					if rrtype ~= const_type.OPT and rrtype ~= const_type.TSIG then
-						data = data..tostring(rrset)
-					end
-				end
-			end
-		end
-		return hdr..info..data
+		return pkt:tostring()
 	end,
 	__len = function(pkt)
 		return pkt.size
@@ -548,6 +535,38 @@ ffi.metatype( knot_pkt_t, {
 		end,
 		towire = function (pkt)
 			return ffi.string(pkt.wire, pkt.size)
+		end,
+		tostring = function(pkt, short)
+			if short == true then return section_tostring(pkt, const_section.ANSWER, true) end
+			local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
+				const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
+			local flags = {}
+			for k,v in pairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
+				if(pkt[v](pkt)) then table.insert(flags, v) end
+			end
+			local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',
+				table.concat(flags, ' '), pkt:qdcount(), pkt:ancount(), pkt:nscount(), pkt:arcount())
+			local data = '\n'
+			if pkt.opt ~= nil then
+				local opt = pkt.opt
+				data = data..string.format(';; OPT PSEUDOSECTION:\n; EDNS: version: %d, flags:%s; udp: %d\n',
+					edns_version(opt), edns_do(opt) and ' do' or '', edns_payload(opt))
+			end
+			if pkt.tsig ~= nil then
+				data = data..string.format(';; TSIG PSEUDOSECTION:\n%s', pkt.tsig:tostring())
+			end
+			local qtype = pkt:qtype()
+			-- Zone transfer answers may omit question
+			local is_xfer = (qtype == const_type.AXFR or qtype == const_type.IXFR) and pkt:qr()
+			if pkt:qdcount() > 0 and not is_xfer then
+				data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
+					tostring(knot_dname_t(pkt:qname())), const_type_str[pkt:qtype()], const_class_str[pkt:qclass()])
+			end
+			local data_sec = {}
+			for i = const_section.ANSWER, const_section.ADDITIONAL do
+				table.insert(data_sec, section_tostring(pkt, i))
+			end
+			return hdr..info..data..table.concat(data_sec, '')
 		end,
 		answers = function (pkt, query)
 			return pkt:qr() and pkt:id() == query:id() and pkt:qclass() == query:qclass()
