@@ -213,6 +213,9 @@ pkt:begin(kdns.section.ANSWER) -- WRONG, throws error
 local wire = pkt:towire()
 ```
 
+EDNS
+~~~~
+
 The EDNS OPT is a special type of RR, because it uses its fields for a different purpose. The library treats it as a RR with only minimal hand-holding, but provides a handful of convenience functions. It also **MUST** be the last RR in the ADDITIONAL section (with the exception of TSIG). This is where you can set maximum UDP payload and `DO` bit to signalize DNSSEC OK.
 
 ```lua
@@ -256,8 +259,29 @@ if pkt.opt then
 end
 ```
 
-TODO: TSIG
-----------
+TSIG
+~~~~
+
+TSIG is not a property of packet but a pairing of TSIG key with a signer state. It has two operations - *sign()*, and *verify()* and keeps digest state between requests. This means that if you verify a query and use the same TSIG for signing response, it will remember the query digest for signing.
+
+```lua
+-- Create TSIG signer from string, same format as ISC dig
+local tsig_client = kdns.tsig('keyname:hmac-md5:Wg==')
+local tsig_server = tsig_client:copy()
+-- Sign packet, TSIG remembers 'last signed' and query digest
+assert(tsig_client:sign(pkt))
+-- Authenticate query
+assert(tsig_server:verify(pkt))
+-- Create answer and sign it
+local answer = pkt:copy()
+answer:qr(true)
+assert(tsig_server:sign(answer))
+-- Verify by client
+assert(tsig_client:verify(answer))
+```
+
+Caveats
+~~~~~~~
 
 There is a caveat with packet parsing, as LuaJIT [doesn't GC cdata](http://luajit.org/ext_ffi_semantics.html#gc), the Lua string with a wire must be referenced during the lifetime of the packet.
 

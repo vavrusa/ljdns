@@ -98,6 +98,12 @@ struct pkt_rcode {
 	static const int NOTZONE    = 10;
 	static const int BADVERS    = 16;
 };
+struct tsig_rcode {
+	static const int BADSIG     = 16;
+	static const int BADKEY     = 17;
+	static const int BADTIME    = 18;
+	static const int BADTRUNC   = 22;
+};
 
 /*
  * Data structures
@@ -154,6 +160,21 @@ typedef struct {
 	knot_rrset_t *_rr;
 	uint8_t _stub[]; /* Do not touch */
 } knot_pkt_t;
+typedef struct {
+	size_t size;
+	uint8_t *data;
+} dnssec_binary_t;
+typedef struct {
+	int algorithm;
+	knot_dname_t *name;
+	dnssec_binary_t secret;
+} knot_tsig_key_t;
+typedef struct {
+	knot_tsig_key_t key;
+	size_t digest_len;
+	uint64_t last_signed;
+	uint8_t digest[64]; /* Max size of the HMAC-SHA512 */
+} tsig_t;
 
 /* libc */
 void free(void *ptr);
@@ -179,6 +200,7 @@ int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16
 knot_rrset_t *knot_rrset_new(const knot_dname_t *owner, uint16_t type, uint16_t rclass, void *mm);
 knot_rrset_t *knot_rrset_copy(const knot_rrset_t *src, void *mm);
 void knot_rrset_free(knot_rrset_t **rrset, void *mm);
+int knot_rrset_rr_from_wire(const uint8_t *pkt_wire, size_t *pos, size_t pkt_size, /*mm_ctx_t*/ void *mm, knot_rrset_t *rrset);
 /* opt rr */
 uint8_t knot_edns_get_version(const knot_rrset_t *opt_rr);
 void knot_edns_set_version(knot_rrset_t *opt_rr, uint8_t version);
@@ -196,9 +218,26 @@ int knot_pkt_put(knot_pkt_t *pkt, uint16_t compr_hint, const knot_rrset_t *rr, u
 int knot_pkt_put_question(knot_pkt_t *pkt, const knot_dname_t *qname,
                           uint16_t qclass, uint16_t qtype);
 int knot_pkt_parse(knot_pkt_t *pkt, unsigned flags);
-int knot_pkt_copy(knot_pkt_t *dst, const knot_pkt_t *src);
 void knot_pkt_clear(knot_pkt_t *pkt);
 void knot_pkt_free(knot_pkt_t **pkt);
+/* tsig */
+int knot_tsig_key_init_str(knot_tsig_key_t *key, const char *params);
+int knot_tsig_key_init_file(knot_tsig_key_t *key, const char *filename);
+int knot_tsig_key_copy(knot_tsig_key_t *dst, const knot_tsig_key_t *src);
+void knot_tsig_key_deinit(knot_tsig_key_t *key);
+int knot_tsig_sign(uint8_t *msg, size_t *msg_len, size_t msg_max_len,
+                   const uint8_t *request_mac, size_t request_mac_len,
+                   uint8_t *digest, size_t *digest_len,
+                   const knot_tsig_key_t *key, uint16_t tsig_rcode,
+                   uint64_t request_time_signed);
+int knot_tsig_client_check(const knot_rrset_t *tsig_rr,
+                           const uint8_t *wire, size_t size,
+                           const uint8_t *request_mac, size_t request_mac_len,
+                           const knot_tsig_key_t *key,
+                           uint64_t prev_time_signed);
+const uint8_t *knot_tsig_rdata_mac(const knot_rrset_t *tsig);
+size_t knot_tsig_rdata_mac_length(const knot_rrset_t *tsig);
+uint64_t knot_tsig_rdata_time_signed(const knot_rrset_t *tsig);
 ]]
 
 -- Basic types
@@ -207,6 +246,7 @@ local u16_p = ffi.typeof('uint16_t *')
 local int_t = ffi.typeof('int')
 local i8_vla = ffi.typeof('char [?]')
 local u8_vla = ffi.typeof('uint8_t [?]')
+local size_vla = ffi.typeof('size_t [?]')
 
 -- Constants
 local const_class = ffi.new('struct rr_class')
@@ -214,6 +254,7 @@ local const_type = ffi.new('struct rr_type')
 local const_section = ffi.new('struct pkt_section')
 local const_opcode = ffi.new('struct pkt_opcode')
 local const_rcode = ffi.new('struct pkt_rcode')
+local const_rcode_tsig = ffi.new('struct tsig_rcode')
 
 -- Meta tables for catchall
 local meta_nokey = { __index = function (t, k) return nil end }
@@ -235,6 +276,9 @@ local const_rcode_str = {
 	[0] = 'NOERROR', [1] = 'FORMERR', [2] = 'SERVFAIL', [3] = 'NXDOMAIN',
 	[4] = 'NOTIMPL', [5] = 'REFUSED', [6] = 'YXDOMAIN', [7] = 'YXRRSET',
 	[8] = 'NXRRSET', [9] = 'NOTAUTH', [10] = 'NOTZONE', [16] = 'BADVERS'
+}
+local const_rcode_tsig_str = {
+	[16] = 'BADSIG', [17] = 'BADKEY', [18] = 'BADTIME', [19] = 'BADTRUNC'
 }
 local const_opcode_str = {
 	[0] = 'QUERY', [1] = 'IQUERY', [2] = 'STATUS', [4] = 'NOTIFY', [5] = 'UPDATE'
@@ -514,13 +558,28 @@ ffi.metatype( knot_pkt_t, {
 		end,
 		put = function (pkt, rrset, noref)
 			-- Insertion loses track of rrset reference, reference it explicitly
+			if pkt == nil or rrset == nil then return false end
 			if noref ~= true then pkt_ref(pkt, rrset) end
 			if rrset:type() == const_type.OPT then pkt.opt = rrset end
-			return knot.knot_pkt_put(pkt, 0, rrset, 0) == 0
+			local ret = knot.knot_pkt_put(pkt, 0, rrset, 0)
+			if ret == 0 then
+				pkt.parsed = pkt.size
+				return true
+			else return false end
 		end,
 		-- Packet manipulation
-		parse = function (pkt, wire)
-			return knot.knot_pkt_parse(pkt, 0) == 0
+		parse = function (pkt)
+			-- Keep TSIG on wire for packets, as packet parser strips it
+			-- @note this is a workaround for libknot quirk, where the TSIG RR is on the wire
+			--       for outgoing packets, but is stripped from incoming packets
+			if pkt == nil then return false end
+			local keep_size = pkt.size
+			local ret = knot.knot_pkt_parse(pkt, 0)
+			if ret == 0 then
+				pkt.size = keep_size
+				if pkt.tsig ~= nil then pkt:arcount(pkt:arcount() + 1) end
+				return true
+			else return false end
 		end,
 		begin = function (pkt, section)
 			if section >= pkt:section() then 
@@ -530,8 +589,12 @@ ffi.metatype( knot_pkt_t, {
 			end
 		end,
 		copy = function (pkt)
-			local dst = knot_pkt_t(#pkt)
-			return knot.knot_pkt_copy(dst, pkt) == 0 and dst or nil
+			if pkt == nil then return nil end
+			local dst = knot_pkt_t(pkt.max_size)
+			ffi.copy(dst.wire, pkt.wire, pkt.size)
+			dst.parsed = 0
+			dst.size = pkt.size
+			return dst:parse() and dst or nil
 		end,
 		clear = function (pkt)
 			return knot.knot_pkt_clear(pkt)
@@ -578,6 +641,75 @@ ffi.metatype( knot_pkt_t, {
 	},
 })
 
+-- TSIG metatype
+local tsig_t = ffi.typeof('tsig_t')
+ffi.metatype( tsig_t, {
+	__gc = function (tsig)
+		knot.knot_tsig_key_deinit(tsig.key)
+	end,
+	__new = function (ct, text)
+		local tsig = ffi.new(tsig_t)
+		if text ~= nil then
+			local ret = knot.knot_tsig_key_init_str(tsig.key, text)
+			if ret ~= 0 then tsig = nil end
+		end
+		return tsig
+	end,
+	__index = {
+		sign = function (tsig, pkt, rcode)
+			-- Attempt to sign with TSIG key
+			if rcode == nil then rcode = 0 end
+			-- Strip previous TSIG from signed answer
+			if pkt.tsig ~= nil then pkt:arcount(pkt:arcount() - 1) end
+			pkt.tsig = nil
+			-- Sign the query/response including previous digest
+			local buf = ffi.new(size_vla, 3, {0, pkt.parsed, pkt.parsed})
+			local ret = knot.knot_tsig_sign(pkt.wire, buf + 1, pkt.max_size, tsig.digest, tsig.digest_len,
+			                                tsig.digest, buf, tsig.key, rcode, tsig.last_signed)
+			if ret ~= 0 then return false end
+			-- Reparse TSIG RR from wire to make it visible
+			local rrset = knot_rrset_t('', const_type.TSIG)
+			ret = knot.knot_rrset_rr_from_wire(pkt.wire, buf + 2, buf[1], nil, rrset)
+			if ret ~= 0 then return false end
+			tsig.digest_len = buf[0]
+			pkt.tsig = rrset
+			pkt.size = buf[1]
+			pkt_ref(pkt, rrset)
+			return true
+		end,
+		verify = function (tsig, pkt)
+			assert(pkt.tsig ~= nil)
+			-- Strip TSIG from wire
+			local old_arcount = pkt:arcount()
+			pkt:arcount(old_arcount - 1)
+			local ret = knot.knot_tsig_client_check(pkt.tsig, pkt.wire, pkt.parsed,
+			                                        tsig.digest, tsig.digest_len, tsig.key, 0)
+			pkt:arcount(old_arcount)
+			-- Store verified signature digest
+			tsig.digest_len = knot.knot_tsig_rdata_mac_length(pkt.tsig)
+			tsig.last_signed = knot.knot_tsig_rdata_time_signed(pkt.tsig)
+			ffi.copy(tsig.digest, knot.knot_tsig_rdata_mac(pkt.tsig), tsig.digest_len)
+			-- Return TSIG RCODE
+			-- @note this expects libknot error codes don't change
+			local const_errcode_tsig = {
+				[0] = true,
+				[-948] = const_rcode_tsig.BADSIG,
+				[-947] = const_rcode_tsig.BADKEY,
+				[-946] = const_rcode_tsig.BADTIME,
+				[-945] = const_rcode_tsig.BADTRUNC,
+			}
+			return const_errcode_tsig[ret] or false
+		end,
+		copy = function (tsig)
+			local copy = tsig_t()
+			if copy == nil or knot.knot_tsig_key_copy(copy.key, tsig.key) ~= 0 then
+				copy = nil
+			end
+			return copy
+		end,
+	},
+})
+
 -- Module API
 local kdns = {
 	-- Constants
@@ -586,12 +718,14 @@ local kdns = {
 	section = const_section,
 	opcode = const_opcode,
 	rcode = const_rcode,
+	rcode_tsig = const_rcode_tsig,
 	tostring = {
 		class = const_class_str,
 		type = const_type_str,
 		section = const_section_str,
 		opcode = const_opcode_str,
 		rcode = const_rcode_str,
+		rcode_tsig = const_rcode_tsig_str,
 	},
 	-- Types
 	dname = knot_dname_t,
@@ -605,6 +739,7 @@ local kdns = {
 		dobit = edns_do,
 		option = edns_option,
 	},
+	tsig = tsig_t,
 	-- Metatypes
 	todname = function (udata) return ffi.cast('knot_dname_t *', udata) end,
 	torrset = function (udata) return ffi.cast('knot_rrset_t *', udata) end,

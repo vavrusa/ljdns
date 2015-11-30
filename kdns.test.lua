@@ -67,7 +67,7 @@ print('[ OK ] kdns.edns')
 -- Test packet writing
 local pkt = kdns.packet(512)
 assert(pkt ~= nil)
-assert(pkt:opcode())
+assert(pkt:opcode() == 0)
 assert(pkt:rd(true) == true)
 assert(pkt:tc(true) == true)
 assert(pkt:aa() == false)
@@ -112,9 +112,35 @@ collectgarbage() -- Must collect previous copy
 assert(copy ~= pkt)
 assert(tostring(copy) == tostring(pkt))
 copy = nil
-pkt = nil
 collectgarbage()
 print('[ OK ] kdns.packet.read')
+
+-- Test TSIG signing
+assert(kdns.tsig('bad-') == nil)
+local tsig_alice = kdns.tsig('testkey:Wg==')
+local tsig_bob = tsig_alice:copy()
+local tsig_badkey = kdns.tsig('badkey:Wg==')
+local tsig_badsig = kdns.tsig('testkey:YQo=')
+assert(tsig_alice ~= nil)
+assert(tsig_bob ~= nil)
+assert(tsig_alice:sign(pkt))
+print('[ OK ] kdns.tsig.sign')
+copy = pkt:copy()
+assert(tsig_bob:verify(copy) == true)
+assert(tsig_badkey:verify(copy) == kdns.rcode_tsig.BADKEY)
+assert(tsig_badsig:verify(copy) == kdns.rcode_tsig.BADSIG)
+print('[ OK ] kdns.tsig.verify')
+copy:qr(true)
+assert(tsig_bob:sign(copy, kdns.rcode_tsig.BADSIG))
+assert(tsig_alice:verify(copy) == true)
+print('[ OK ] kdns.tsig.exchange')
+tsig_bob = nil
+tsig_alice = nil
+collectgarbage()
+copy = nil
+pkt = nil
+collectgarbage()
+print('[ OK ] kdns.tsig')
 
 -- Test RR parser
 local rrparser = require('kdns.rrparser')
