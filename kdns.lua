@@ -430,8 +430,11 @@ local function pkt_unref(pkt)
 		if v[1] == ffi.cast(void_p, pkt) then pkt_refs[i] = nil end
 	end
 end
+local pkt_arr = ffi.new('knot_pkt_t *[1]')
 local function pkt_free(pkt)
-	knot.knot_pkt_free(ffi.new("knot_pkt_t *[1]", pkt))
+	pkt_unref(pkt)
+	pkt_arr[0] = pkt
+	knot.knot_pkt_free(pkt_arr)
 end
 ffi.metatype( knot_pkt_t, {
 	__new = function (ctype, size, wire)
