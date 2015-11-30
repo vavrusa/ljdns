@@ -464,8 +464,8 @@ ffi.metatype( knot_pkt_t, {
 		nscount = function(pkt) return pkt_cnt(pkt, 8) end,
 		arcount = function(pkt) return pkt_cnt(pkt, 10) end,
 		opcode = function (pkt, val)
-			pkt.wire[2] = (val) and bor(band(pkt.wire[2], 0x87), 8 * val) or pkt.wire[2]
-			return band(pkt.wire[2], 0x87) / 8
+			pkt.wire[2] = (val) and bor(band(pkt.wire[2], 0x78), 8 * val) or pkt.wire[2]
+			return band(pkt.wire[2], 0x78) / 8
 		end,
 		rcode = function (pkt, val)
 			pkt.wire[3] = (val) and bor(band(pkt.wire[3], 0xf0), val) or pkt.wire[3]
