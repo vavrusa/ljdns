@@ -47,11 +47,11 @@ local function client_recv(sock)
 	if is_udp(sock) then return sock:receive()
 	else -- Decode DNS message length for TCP
 		local len = sock:receive(2)
-		local ret = false
-		if len then
+		local ret = nil
+		if len ~= nil then
 			ffi.copy(msglen_buf, len, 2)
 			len = n16(msglen_buf[0])
-			ret = sock:receive(len) 
+			ret = sock:receive(len)
 		end
 		return ret
 	end
@@ -61,11 +61,12 @@ end
 local io = {
 	client = client,
 	send = function (msg, sock) return client_send(msg, sock) end,
-	recv = function (msg, sock) return client_recv(sock) end,
+	recv = function (sock) return client_recv(sock) end,
 	query = function (msg, host, tcp, port)
 		local sock = assert(client(host, port, tcp))
 		client_send(msg, sock)
 		return client_recv(sock)
 	end,
+	now = socket.gettime,
 }
 return io
