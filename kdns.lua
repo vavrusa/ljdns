@@ -363,11 +363,11 @@ ffi.metatype( knot_rrset_t, {
 		return rr:tostring()
 	end,
 	__index = {
-		owner = function(rr) return rr._owner end,
-		type = function(rr) return rr._type end,
-		class = function(rr) return rr._class end,
+		owner = function(rr) return rr ~= nil and rr._owner or nil end,
+		type = function(rr)  return rr ~= nil and rr._type or 0 end,
+		class = function(rr) return rr ~= nil and rr._class or 0 end,
 		ttl = function(rr, ttl)
-			if rr.rr.count > 0 then
+			if rr ~= nil and rr.rr.count > 0 then
 				if ttl ~= nil then
 					local rd = knot.knot_rdataset_at(rr.rr, 0)
 					knot.knot_rdata_set_ttl(rd, ttl)
@@ -376,10 +376,12 @@ ffi.metatype( knot_rrset_t, {
 			else return 0 end
 		end,
 		rdata = function(rr, i)
+			if rr == nil then return nil end
 			local rdata = knot.knot_rdataset_at(rr.rr, i)
 			return ffi.string(knot.knot_rdata_data(rdata), knot.knot_rdata_rdlen(rdata))
 		end,
 		get = function(rr, i)
+			if rr == nil then return nil end
 			return {owner = rr:owner(),
 			        ttl = rr:ttl(),
 			        class = tonumber(rr:class()),
@@ -387,15 +389,17 @@ ffi.metatype( knot_rrset_t, {
 			        rdata = rr:rdata(i)}
 		end,
 		add = function(rr, rdata, ttl)
+			if rr == nil then return nil end
 			if ttl == nil then ttl = rr:ttl() end
 			local ret = knot.knot_rrset_add_rdata(rr, rdata, #rdata, ttl, nil)
 			return ret == 0 and rr or nil
 		end,
 		copy = function (rr)
+			if rr == nil then return nil end
 			return ffi.gc(knot.knot_rrset_copy(rr, nil), rrset_free)
 		end,
 		tostring = function(rr)
-			if rr.rr.count > 0 then
+			if rr ~= nil and rr.rr.count > 0 then
 				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				if ret < 0 then return nil end
 				return ffi.string(rrset_buf)
@@ -441,8 +445,9 @@ end
 
 -- Metatype for packet
 local knot_pkt_t = ffi.typeof('knot_pkt_t')
-local function pkt_cnt(pkt, off)
+local function pkt_cnt(pkt, off, val)
 	local ptr = ffi.cast(u16_p, pkt.wire + off)
+	if val ~= nil then ptr[0] = n16(val) end
 	return n16(ptr[0])
 end
 local function pkt_flags(pkt, idx, off, val)
@@ -494,24 +499,27 @@ ffi.metatype( knot_pkt_t, {
 		return pkt:tostring()
 	end,
 	__len = function(pkt)
-		return pkt.size
+		assert(pkt ~= nil) return pkt.size
 	end,
 	__index = {
 		-- Header
 		id = function (pkt, val)
+			assert(pkt ~= nil)
 			local id_wire = ffi.cast(u16_p, pkt.wire)
 			if val ~= nil then id_wire[0] = n16(val) end
 			return n16(id_wire[0])
 		end,
-		qdcount = function(pkt) return pkt_cnt(pkt, 4) end,
-		ancount = function(pkt) return pkt_cnt(pkt, 6) end,
-		nscount = function(pkt) return pkt_cnt(pkt, 8) end,
-		arcount = function(pkt) return pkt_cnt(pkt, 10) end,
+		qdcount = function(pkt, val) return pkt_cnt(pkt, 4,  val) end,
+		ancount = function(pkt, val) return pkt_cnt(pkt, 6,  val) end,
+		nscount = function(pkt, val) return pkt_cnt(pkt, 8,  val) end,
+		arcount = function(pkt, val) return pkt_cnt(pkt, 10, val) end,
 		opcode = function (pkt, val)
+			assert(pkt ~= nil)
 			pkt.wire[2] = (val) and bor(band(pkt.wire[2], 0x78), 8 * val) or pkt.wire[2]
 			return band(pkt.wire[2], 0x78) / 8
 		end,
 		rcode = function (pkt, val)
+			assert(pkt ~= nil)
 			pkt.wire[3] = (val) and bor(band(pkt.wire[3], 0xf0), val) or pkt.wire[3]
 			return band(pkt.wire[3], 0x0f)
 		end,
@@ -532,12 +540,14 @@ ffi.metatype( knot_pkt_t, {
 		qtype  = function(pkt) return knot.knot_pkt_qtype(pkt) end,
 		-- Sections
 		question = function (pkt, owner, rtype, rclass)
+			if pkt == nil then return nil end
 			if rclass == nil then rclass = const_class.IN end
 			if pkt.rrset_count > 0 then error("packet must be empty to insert question") end
 			if type(owner) == 'string' then owner = knot_dname_t(owner) end
 			return knot.knot_pkt_put_question(pkt, owner, rclass, rtype) == 0
 		end,
 		section = function (pkt, section_id)
+			if pkt == nil then return nil end
 			if section_id == nil then
 				-- Old version of libknot didn't have 'tsig_wire' struct
 				-- check if it overlaps with pkt._current, in this case
@@ -582,6 +592,7 @@ ffi.metatype( knot_pkt_t, {
 			else return false end
 		end,
 		begin = function (pkt, section)
+			assert(pkt ~= nil)
 			if section >= pkt:section() then 
 				return knot.knot_pkt_begin(pkt, section)
 			else
