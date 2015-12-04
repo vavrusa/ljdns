@@ -18,7 +18,21 @@ for k,v in next,arg,0 do
 	elseif v == '+short' then short = true
 	elseif v == '+tcp' then tcp = true
 	elseif v == '+cd' then table.insert(flags, 'cd')
-	elseif v == '+do' then dobit = true
+	elseif v == '+do' or v == '+dnssec' then dobit = true
+	elseif v == '-h' or v == '--help' then
+		print(string.format('Usage: %s [options] [@server] [type] [class] [domain]', arg[0]))
+		print('Options:')
+		print('\t-p <num>  server port number (default: 53)')
+		print('\t-y <tsig> use TSIG key (default: none, example: "testkey:hmac-md5:Wg==")')
+		print('\t+tcp      use TCP for transport')
+		print('\t+short    print only answer records')
+		print('\t+cd       DNSSEC checking disabled')
+		print('\t+do       request DNSSEC records')
+		print('Examples:')
+		print('  ',arg[0],'NS cz +do')
+		print('  ',arg[0],'@2001:678:f::1 AAAA nic.cz +tcp')
+		print('  ',arg[0],'-y xfrkey:hmac-md5:Wg== @127.0.0.1 -p 5353 AXFR nic.cz')
+		return 0
 	else -- + Modifiers
 		local match = v:match('+bufsize=(%d+)')
 		if match ~= nil then bufsize = tonumber(match)
