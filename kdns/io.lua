@@ -8,21 +8,42 @@ local socket = require('socket')
 local ffi = require('ffi')
 local n16 = require('kdns.utils').n16
 
+-- Return appropriate socket implementation
+local function getsocket(addr, tcp)
+	if addr:find(':', 1, true) ~= nil then
+		if tcp then return socket.tcp6()
+		else        return socket.udp6() end
+	else
+		if tcp then return socket.tcp()
+		else        return socket.udp() end
+	end
+	return false
+end
+
 -- Return socket connected to peer (UDP or TCP)
 local function client (host, port, tcp)
 	if port == nil then port = 53 end
-	if tcp == nil then tcp = false end
-	local sock = false
-	if host:find(':', 1, true) ~= nil then
-		if tcp then sock = socket.tcp6()
-		else        sock = socket.udp6() end
-	else
-		if tcp then sock = socket.tcp()
-		else        sock = socket.udp() end
-	end
+	local sock = getsocket(host, tcp)
 	if sock then
 		sock:settimeout(3)
 		sock:setpeername(host, port)
+	end
+	return sock
+end
+
+-- Return bound / listening socket (UDP or TCP)
+local function server (addr, port, tcp)
+	if port == nil then port = 53 end
+	local sock = false
+	if tcp then
+		sock = socket.bind(addr, port)
+	else
+		sock = getsocket(addr)
+		local ok, err = sock:setsockname(addr, port)
+		if not ok then return false, err end
+	end
+	if sock then
+		sock:settimeout(0) -- Non-blocking
 	end
 	return sock
 end
@@ -59,7 +80,9 @@ end
 
 -- Module interface
 local io = {
+	server = server,
 	client = client,
+	poll = socket.select,
 	send = function (msg, sock) return client_send(msg, sock) end,
 	recv = function (sock) return client_recv(sock) end,
 	query = function (msg, host, tcp, port)

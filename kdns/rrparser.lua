@@ -3,8 +3,19 @@
 --
 
 local ffi = require('ffi')
-local libzscanner = ffi.load(require('kdns.utils').dll_versioned('libzscanner', '0'))
+local utils = require('kdns.utils')
+local libzscanner = ffi.load(utils.dll_versioned('libzscanner', '0'))
 ffi.cdef[[
+int memcmp(const void *s1, const void *s2, size_t n);
+
+/*
+ * POSIX I/O
+ */
+typedef struct {} FILE;
+size_t fread(void *ptr, size_t size, size_t count, FILE *stream);
+FILE *fopen(const char *filename, const char * mode);
+int feof(FILE * stream);
+int fclose(FILE * stream);
 
 /*
  * Data structures
@@ -70,7 +81,7 @@ struct scanner {
 	uint32_t default_ttl;
 	void (*process_record)(zs_scanner_t *);
 	void (*process_error)(zs_scanner_t *);
-	void *data;
+	void     *data;
 	char     *path;
 	uint64_t line_counter;
 	int      error_code;
@@ -109,7 +120,16 @@ int zs_scanner_parse_file(zs_scanner_t *scanner,
 const char* zs_strerror(const int code);
 ]]
 
+-- LuaJIT 2.1 has table.clear
+local ok, table_clear = pcall(require, 'table.clear')
+if not ok then
+	table_clear = function (table)
+		for i, v in ipairs(table) do table[i] = nil end
+	end
+end
+
 -- Wrap scanner context
+local const_char_t = ffi.typeof('const char *')
 local zs_scanner_t = ffi.typeof('zs_scanner_t')
 ffi.metatype( zs_scanner_t, {
 	__new = function(zs, on_record, on_error)
@@ -120,9 +140,10 @@ ffi.metatype( zs_scanner_t, {
 		parse_file = function(zs, file)
 			return libzscanner.zs_scanner_parse_file(zs, file)
 		end,
-		read = function(zs, str)
-			local buf = ffi.cast(ffi.typeof('const char *'), str)
-			return libzscanner.zs_scanner_parse(zs, buf, buf + #str, false)
+		read = function(zs, str, len)
+			if not len then len = #str end
+			local buf = ffi.cast(const_char_t, str)
+			return libzscanner.zs_scanner_parse(zs, buf, buf + len, false)
 		end,
 		current_rr = function(zs)
 			return {owner = ffi.string(zs.r_owner, zs.r_owner_length),
@@ -137,6 +158,51 @@ ffi.metatype( zs_scanner_t, {
 	},
 })
 
+-- POSIX I/O
+local fbuflen = 2^15
+local fbuf = ffi.new('char[?]', fbuflen)
+local file_t = ffi.typeof('FILE')
+local function file_close(fp) ffi.C.fclose(fp) end
+ffi.metatype( file_t, {
+	__new = function (ct, path, mode) return ffi.gc(ffi.C.fopen(path, mode), file_close) end,
+	__index = {
+		read = function (fp, buf, buflen)
+			if ffi.C.feof(fp) ~= 0 then return 0 end
+			return ffi.C.fread(buf, 1, buflen, fp)
+		end,
+	}
+})
+
+local function stream_consume(parser, fs)
+	local rb = fs:read(fbuf, fbuflen)
+	if rb > 0 then
+		return parser:read(fbuf, fbuflen) == 0
+	else return false end
+end
+
+-- Stream parser that generates RRs
+local function stream_parser(path)
+	local fs = file_t(path, 'r')
+	if not fs then return nil end
+	local rrbufs, avail, cur = {}, 0, 0
+	local parser = zs_scanner_t(function (p)
+		table.insert(rrbufs, p:current_rr())
+		avail = avail + 1
+	end)
+	return function ()
+		while avail == 0 do
+			table_clear(rrbufs)
+			if not stream_consume(parser, fs) then
+				return false
+			end
+			cur = 0
+		end
+		avail = avail - 1
+		cur = cur + 1
+		return rrbufs[cur]
+	end
+end
+
 -- Module API
 local rrparser = {
 	new = zs_scanner_t,
@@ -150,5 +216,6 @@ local rrparser = {
 		end
 		return records
 	end,
+	stream = stream_parser,
 }
 return rrparser

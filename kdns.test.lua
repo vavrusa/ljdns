@@ -11,6 +11,7 @@ assert(kdns.rcode.SERVFAIL == 2)
 assert(kdns.tostring.rcode[2] == 'SERVFAIL')
 assert(kdns.opcode.QUERY == 0)
 assert(kdns.tostring.opcode[0] == 'QUERY')
+collectgarbage()
 print('[ OK ] kdns.constants')
 
 -- Test domain names
@@ -21,8 +22,9 @@ dname = kdns.dname.parse('example.COM')
 assert(dname == '\7example\3COM')
 assert(dname:labels() == 2)
 assert(dname:lower() == '\7example\3com')
-assert(dname:within('\3com') == true)
+assert(dname:within('\3COM') == true)
 assert(dname:within('\2cz') == false)
+collectgarbage()
 print('[ OK ] kdns.dname')
 
 -- Test RDATA
@@ -36,6 +38,7 @@ assert(kdns.rdata.mx('10 test') == '\0\10\4test\0')
 assert(kdns.rdata.txt('abcd') == '\4abcd')
 assert(kdns.rdata.parse('LOC 52 22 23.000 N 4 53 32.000 E -2.00m 0.00m 10000m 10m') ~= nil)
 kdns.rdata.parse('SRV 0 5 zzzz')
+collectgarbage()
 print('[ OK ] kdns.rdata')
 
 -- Test RR sets
@@ -49,6 +52,13 @@ assert(#rrset == 0)
 rrset:add(kdns.rdata.ns('test'), 3600)
 assert(#rrset == 1)
 assert(rrset:rdata(0) == '\4test\0')
+collectgarbage()
+local rrset_copy = rrset:copy()
+assert(rrset_copy ~= nil)
+assert(rrset_copy:owner() ~= rrset:owner())
+assert(kdns.dname.equals(rrset_copy:owner(), rrset:owner()))
+assert(#rrset_copy == #rrset)
+rrset_copy = nil
 collectgarbage()
 print('[ OK ] kdns.rrset')
 
@@ -95,16 +105,20 @@ print('[ OK ] kdns.packet.write')
 
 -- Test packet reading
 local copy = kdns.packet(#wire, wire)
+collectgarbage()
 assert(copy ~= nil)
 assert(copy:parse() == true)
+collectgarbage()
 assert(copy:id() == pkt:id())
 assert(copy:qname() == pkt:qname())
 assert(copy:qtype() == pkt:qtype())
 assert(copy:qclass() == pkt:qclass())
 assert(copy:answers(pkt) == false)
-assert(tostring(copy) == tostring(pkt))
+assert(copy:tostring() == pkt:tostring())
 copy:qr(true)
 assert(copy:answers(pkt) == true)
+collectgarbage()
+print('[ OK ] kdns.packet.copy')
 
 -- Test packet copy
 copy = pkt:copy()
@@ -115,24 +129,36 @@ copy = nil
 collectgarbage()
 print('[ OK ] kdns.packet.read')
 
+-- Test making answer
+copy = kdns.packet(#wire)
+assert(pkt:toanswer(copy))
+assert(copy:qr() == true)
+assert(copy:answers(pkt) == true)
+copy = nil
+collectgarbage()
+print('[ OK ] kdns.packet.answer')
+
 -- Test TSIG signing
+pkt:qr(false)
 assert(kdns.tsig('bad-') == nil)
 local tsig_alice = kdns.tsig('testkey:Wg==')
-local tsig_bob = tsig_alice:copy()
+local tsig_bob = kdns.tsig('testkey:Wg==')
 local tsig_badkey = kdns.tsig('badkey:Wg==')
 local tsig_badsig = kdns.tsig('testkey:YQo=')
 assert(tsig_alice ~= nil)
 assert(tsig_bob ~= nil)
 assert(tsig_alice:sign(pkt))
+collectgarbage()
 print('[ OK ] kdns.tsig.sign')
 copy = pkt:copy()
 assert(tsig_bob:verify(copy) == true)
 assert(tsig_badkey:verify(copy) == kdns.rcode_tsig.BADKEY)
 assert(tsig_badsig:verify(copy) == kdns.rcode_tsig.BADSIG)
 print('[ OK ] kdns.tsig.verify')
-copy:qr(true)
-assert(tsig_bob:sign(copy, kdns.rcode_tsig.BADSIG))
+copy:qr(true) -- Make it a response
+assert(tsig_bob:sign(copy))
 assert(tsig_alice:verify(copy) == true)
+collectgarbage()
 print('[ OK ] kdns.tsig.exchange')
 tsig_bob = nil
 tsig_alice = nil
@@ -148,6 +174,7 @@ local fname = 'examples/example.com.zone'
 local records = rrparser.parse_file(fname)
 assert(records ~= nil)
 assert(#records == 10)
+print('[ OK ] kdns.rrparser.parsefile')
 -- Parse file lines
 local rc = 0
 local parser = rrparser.new()
@@ -156,6 +183,7 @@ for line in io.lines(fname) do
 	assert(rc == 0)
 	assert(parser.error_code == 0)
 end
+print('[ OK ] kdns.rrparser.lines')
 -- Parse record (custom callbacks)
 parser = rrparser.new(function (p)
 	local rr = p:current_rr()
@@ -167,6 +195,19 @@ end)
 rc = parser:read("foo. IN 3600 NS bar.\n")
 assert(rc == 0)
 assert(parser.error_code == 0)
-print('[ OK ] kdns.rrparser')
+print('[ OK ] kdns.rrparser.read')
+-- Parse file stream
+local parsed = 0
+local stream = rrparser.stream(fname)
+local rr = stream()
+while rr do
+	parsed = parsed + 1
+	rr = stream()
+end
+collectgarbage()
+assert(parsed == 10)
+stream = nil
+rr = nil
+print('[ OK ] kdns.rrparser.stream')
 collectgarbage()
 print('[ OK ] kdns')

@@ -7,8 +7,8 @@ It supports all widely used DNS records (DNSSEC included) with a lean and mean A
 Requirements
 ------------
 
-- [LuaJIT]. Regular Lua doesn't have the FFI module.
-- [libknot][libknot] isn't bundled, and must be [installed separately][knot-readme].
+- [LuaJIT 2.x][libknot] - PUC-RIO Lua doesn't have the FFI module.
+- [libknot][libknot] - isn't bundled, and must be [installed separately][knot-readme].
 
 Installation
 ------------
@@ -83,10 +83,23 @@ The library provides a handful of useful functions over domain names, use string
 ```lua
 -- Count domain name labels
 dname:labels()
--- Covert to lowercase (in-place)
+-- Covert to lowercase
 print(dname:lower())
 -- Checks if dname is a child of parent
 if dname:within('\3com') then print('child of com.') end
+```
+
+Domain names (and other following types) are cdata objects, keep in mind that their direct comparison is identity check.
+
+```lua
+local a, b = kdns.dname('\2cz'), kdns.dname('\2cz')
+-- Identity check: they have same contents, but they are different objects
+assert(a == b) -- FAIL
+assert(a == a) -- OK
+-- Equivalence check: compare their contents with dname.equals
+assert(kdns.dname.equals(a, b)) -- OK
+assert(a:equals('\3com')) -- FAIL
+assert(a:equals(b)) -- OK
 ```
 
 RDATA
