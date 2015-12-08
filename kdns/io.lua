@@ -53,11 +53,11 @@ local function is_udp(sock) return sock['accept'] == nil end
 
 -- Send DNS message
 local msglen_buf = ffi.new('uint16_t [1]')
-local function client_send(msg, sock)
+local function client_send(sock, msg, len)
 	if is_udp(sock) then return sock:send(msg)
 	else -- Encode message length for TCP
-		local len = n16(#msg)
-		msglen_buf[0] = len
+		if not len then len = #msg end
+		msglen_buf[0] = n16(len)
 		sock:send(ffi.string(msglen_buf, 2))
 		return sock:send(msg)
 	end
@@ -83,11 +83,11 @@ local io = {
 	server = server,
 	client = client,
 	poll = socket.select,
-	send = function (msg, sock) return client_send(msg, sock) end,
+	send = function (sock, msg, len) return client_send(sock, msg, len) end,
 	recv = function (sock) return client_recv(sock) end,
 	query = function (msg, host, tcp, port)
 		local sock = assert(client(host, port, tcp))
-		client_send(msg, sock)
+		client_send(sock, msg)
 		return client_recv(sock)
 	end,
 	now = socket.gettime,

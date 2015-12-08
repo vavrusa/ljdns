@@ -60,7 +60,7 @@ if key ~= nil then
 end
 local elapsed = kdns.io.now()
 local sock = assert(kdns.io.client(host, port, tcp))
-kdns.io.send(query:towire(), sock)
+kdns.io.send(sock, query:towire())
 sock:shutdown('send')
 -- Start receiving answers
 local rcvd, npkts, wire, tsig_ok = 0, 0, kdns.io.recv(sock), true

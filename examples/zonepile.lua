@@ -6,6 +6,7 @@ local ffi = require('ffi')
 local dname_p = ffi.typeof('knot_dname_t *')
 -- Globals
 local pile = '.'
+local valid_types = { [kdns.type.AXFR] = true, [kdns.type.IXFR] = true, [kdns.type.SOA] = true }
 local sockets, reverse, listeners, writers, pending = {}, {}, {}, {}, {}
 -- Parameters
 for k,v in next,arg,0 do
@@ -25,8 +26,8 @@ for k,v in next,arg,0 do
 	end
 end
 -- Set up async callbacks
-local function async_write(socket, msg)
-	nio.send(msg, socket)
+local function async_write(socket, msg, len)
+	nio.send(socket, msg, len)
 	table.insert(writers, socket)
 	coroutine.yield()
 end
@@ -38,6 +39,7 @@ local function  async_checkout(socket, msg, answer)
 	local wire = answer:towire()
 	async_write(socket, wire)
 	msg:toanswer(answer)
+	answer:aa(true)
 end
 local function  async_insert(socket, msg, answer, rr)
 	local npkts = 0
@@ -54,35 +56,42 @@ local function async_serve(socket)
 	if not msg then return false end
 	local query = kdns.packet(#msg, msg)
 	if not query:parse() then return false end
+	-- Support only SOA, AXFR and IXFR
+	local qtype = query:qtype()
+	if not valid_types[qtype] then return false end
 	-- @todo Sanitize and pick the right zone
 	local qname = kdns.dname(query:qname()):tostring()
 	local zonefile = pile..qname..'zone'
 	-- Start streaming answer
-	local answer = kdns.packet(65535)
-	query:toanswer(answer)
 	print(string.format('[%s] streaming to %s#%d', qname, socket:getpeername()))
+	local answer = kdns.packet(16384+4096)
+	query:toanswer(answer)
 	local tstart = nio.now()
 	local stream = rrparser.stream(zonefile)
 	local soa, rr = nil, stream()
-	local nrrs, npkts = 0,0
+	local nrrs, npkts = 0, 0
+	-- Hoist empty RR container alloc
+	local rrset = kdns.rrset(nil, 0)
 	while rr do
-		local rrset = kdns.rrset(nil, rr.type)
+		-- Purge RR container
+		rrset:clear()
 		rrset._owner = ffi.cast(dname_p, rr.owner)
-		-- @todo: Parse them into RDATA format as well and then static assign
-		--        this is cheaper than fragmented mallocs
+		rrset._type = rr.type
 		rrset:add(rr.rdata, rr.ttl)
 		-- Keep SOA reference
-		if rr.type == kdns.type.SOA then soa = rrset:copy() end
+		if rr.type == kdns.type.SOA then
+			soa = rrset:copy()
+			if qtype == kdns.type.SOA then break end
+		end
+		-- Send
 		nrrs = nrrs + 1
 		npkts = npkts + async_insert(socket, query, answer, rrset)
-		-- Invalidate static memory
-		rrset._owner = nil
 		rr = stream()
 	end
+	-- Invalidate unmanaged memory
+	rrset._owner = nil
 	-- Stream closing records
-	if query:qtype() == kdns.type.AXFR then
-		async_insert(socket, query, answer, soa)
-	end
+	async_insert(socket, query, answer, soa)
 	async_write(socket, answer:towire())
 	print(string.format('[%s] finished: %d records, %d messages, %d msec', qname, nrrs, npkts, (nio.now() - tstart) * 1000.0))
 	return false
@@ -102,6 +111,7 @@ local function async_update(s)
 	else
 		local ok, err = coroutine.resume(pending[s])
 		if not ok or coroutine.status(pending[s]) == 'dead' then
+			if err then print(err) end
 			table.remove(sockets, reverse[s])
 			reverse[s] = nil
 			pending[s] = nil

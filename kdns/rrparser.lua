@@ -174,10 +174,11 @@ ffi.metatype( file_t, {
 })
 
 local function stream_consume(parser, fs)
-	local rb = fs:read(fbuf, fbuflen)
+	local rb, ret = fs:read(fbuf, fbuflen), false
 	if rb > 0 then
-		return parser:read(fbuf, fbuflen) == 0
-	else return false end
+		ret = parser:read(fbuf, rb) == 0
+	end
+	return ret
 end
 
 -- Stream parser that generates RRs

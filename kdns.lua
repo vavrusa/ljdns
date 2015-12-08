@@ -191,6 +191,8 @@ extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
 uint8_t *knot_rdata_data(const knot_rdata_t *rr);
 knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
+knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
+void knot_rdataset_clear(knot_rdataset_t *rrs, void /* mm_ctx_t */ *mm);
 int knot_rdataset_copy(knot_rdataset_t *dst, const knot_rdataset_t *src, void /* mm_ctx_t */ *mm);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
 uint32_t knot_rrset_ttl(const knot_rrset_t *rrset);
@@ -439,6 +441,10 @@ ffi.metatype( knot_rrset_t, {
 			local copy = knot_rrset_t(rr._owner, rr._type, rr._class)
 			if knot.knot_rdataset_copy(copy.rr, rr.rr, nil) ~= 0 then return nil end
 			return copy
+		end,
+		clear = function (rr)
+			assert(rr)
+			knot.knot_rdataset_clear(rr.rr, nil)
 		end,
 		tostring = function(rr)
 			assert(rr)
