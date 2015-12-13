@@ -16,6 +16,7 @@ size_t fread(void *ptr, size_t size, size_t count, FILE *stream);
 FILE *fopen(const char *filename, const char * mode);
 int feof(FILE * stream);
 int fclose(FILE * stream);
+const char *strerror(int err);
 
 /*
  * Data structures
@@ -164,7 +165,11 @@ local fbuf = ffi.new('char[?]', fbuflen)
 local file_t = ffi.typeof('FILE')
 local function file_close(fp) ffi.C.fclose(fp) end
 ffi.metatype( file_t, {
-	__new = function (ct, path, mode) return ffi.gc(ffi.C.fopen(path, mode), file_close) end,
+	__new = function (ct, path, mode)
+		local fp = ffi.C.fopen(path, mode)
+		if fp == nil then return nil, ffi.string(ffi.C.strerror(ffi.errno())) end
+		return ffi.gc(fp, file_close)
+	end,
 	__index = {
 		read = function (fp, buf, buflen)
 			if ffi.C.feof(fp) ~= 0 then return 0 end
@@ -183,8 +188,8 @@ end
 
 -- Stream parser that generates RRs
 local function stream_parser(path)
-	local fs = file_t(path, 'r')
-	if not fs then return nil end
+	local fs, err = file_t(path, 'r')
+	if not fs then return nil, err end
 	local rrbufs, avail, cur = {}, 0, 0
 	local parser = zs_scanner_t(function (p)
 		table.insert(rrbufs, p:current_rr())
