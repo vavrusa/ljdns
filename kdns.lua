@@ -179,6 +179,7 @@ void free(void *ptr);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
 /* domain names */
 bool knot_dname_is_equal(const knot_dname_t *d1, const knot_dname_t *d2);
+int knot_dname_cmp(const knot_dname_t *d1, const knot_dname_t *d2);
 int knot_dname_size(const knot_dname_t *name);
 knot_dname_t *knot_dname_from_str(uint8_t *dst, const char *name, size_t maxlen);
 char *knot_dname_to_str(char *dst, const knot_dname_t *name, size_t maxlen);
@@ -324,10 +325,15 @@ ffi.metatype( knot_dname_t, {
 			if not b then return false end
 			return knot.knot_dname_is_equal(a, ffi.cast(void_p, b))
 		end,
+		compare = function(a, b)
+			assert(a)
+			if not b then return false end
+			return knot.knot_dname_cmp(a, ffi.cast(void_p, b))
+		end,
 		parse = function(name)
 			assert(name)
 			local dname = knot.knot_dname_from_str(dname_buf, name, 255)
-			if not dname then return nil end
+			if dname == nil then return nil end
 			return knot_dname_t(dname.bytes, #dname)
 		end,
 		lower = function(dname) -- Copy to make sure it's safely mutable
@@ -343,6 +349,10 @@ ffi.metatype( knot_dname_t, {
 		within = function(dname, parent)
 			assert(dname)
 			return knot.knot_dname_in(ffi.cast(void_p, parent), dname)
+		end,
+		parentof = function(dname, child)
+			assert(dname)
+			return knot.knot_dname_in(dname, ffi.cast(void_p, child))
 		end,
 		tostring = function(dname)
 			assert(dname)
