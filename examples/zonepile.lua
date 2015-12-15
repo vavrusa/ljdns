@@ -3,7 +3,6 @@ local kdns = require('kdns')
 local nio = require('kdns.io')
 local rrparser = require('kdns.rrparser')
 local ffi = require('ffi')
-local dname_p = ffi.typeof('knot_dname_t *')
 -- Globals
 local pile = '.'
 local valid_types = { [kdns.type.AXFR] = true, [kdns.type.IXFR] = true, [kdns.type.SOA] = true }
@@ -59,34 +58,34 @@ local function async_serve(socket)
 	-- Support only SOA, AXFR and IXFR
 	local qtype = query:qtype()
 	if not valid_types[qtype] then return false end
-	-- @todo Sanitize and pick the right zone
+	-- Sanitize and pick the right zone
 	local qname = kdns.dname(query:qname()):tostring()
-	local zonefile = pile..qname..'zone'
+	if qname == '.' then qname = 'root.' end
+	local zonefile = pile..qname:gsub('/', '_')..'zone'
 	-- Start streaming answer
-	print(string.format('[%s] streaming to %s#%d', qname, socket:getpeername()))
+	print(string.format('[%s] streaming to %s#%d', zonefile, socket:getpeername()))
 	local answer = kdns.packet(16384+4096)
 	query:toanswer(answer)
 	local tstart = nio.now()
-	local stream = rrparser.stream(zonefile)
-	local soa, rr = nil, stream()
-	local nrrs, npkts = 0, 0
+	local parser = rrparser.new()
+	assert(parser:open(zonefile))
+	local soa, nrrs, npkts = nil, 0, 0
 	-- Hoist empty RR container alloc
 	local rrset = kdns.rrset(nil, 0)
-	while rr do
+	while parser:parse() do
 		-- Purge RR container
 		rrset:clear()
-		rrset._owner = ffi.cast(dname_p, rr.owner)
-		rrset._type = rr.type
-		rrset:add(rr.rdata, rr.ttl)
+		rrset._owner = kdns.todname(parser.r_owner, parser.r_owner_length)
+		rrset._type = parser.r_type
+		rrset:add(ffi.string(parser.r_data, parser.r_data_length), parser.r_ttl)
 		-- Keep SOA reference
-		if rr.type == kdns.type.SOA then
+		if parser.r_type == kdns.type.SOA then
 			soa = rrset:copy()
 			if qtype == kdns.type.SOA then break end
 		end
 		-- Send
 		nrrs = nrrs + 1
 		npkts = npkts + async_insert(socket, query, answer, rrset)
-		rr = stream()
 	end
 	-- Invalidate unmanaged memory
 	rrset._owner = nil

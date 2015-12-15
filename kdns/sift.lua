@@ -1,3 +1,4 @@
+local ffi = require('ffi')
 local kdns = require('kdns')
 local rrparser = require('kdns.rrparser')
 local sift = {}
@@ -83,9 +84,9 @@ local function makefilter(query)
 end
 
 local function sink_print()
-	return function (owner, type, ttl, rdata)
+	return function (owner, rtype, ttl, rdata)
 		if not owner then return true end
-		io.write(kdns.rrset(owner, type):add(rdata, ttl):tostring())
+		io.write(kdns.rrset(owner, rtype):add(rdata, ttl):tostring())
 	end
 end
 
@@ -94,6 +95,15 @@ local function sink_table()
 	return function (owner, type, ttl, rdata)
 		if not owner then return capture end
 		table.insert(capture, kdns.rrset(owner, type):add(rdata, ttl))
+	end
+end
+
+local function sink_set()
+	local capture = rrparser.set()
+	return function (owner, type, ttl, rdata)
+		if not owner then return capture end
+		local rrset = capture:newrr(true)
+		rrset:init(owner, type, nil, true):add(rdata, ttl)
 	end
 end
 
@@ -114,14 +124,14 @@ end
 
 local function zone(zone, sink, filter)
 	if not sink then sink = sink_print() end
-	local stream = assert(rrparser.stream(zone))
-	local rr = stream()
-	while rr do
-		local owner_dname = kdns.todname(rr.owner)
-		if filter(owner_dname, rr.type, rr.ttl, rr.rdata) then
-			sink(owner_dname, rr.type, rr.ttl, rr.rdata)
+	local parser = assert(rrparser.new())
+	assert(parser:open(zone))
+	while parser:parse() do
+		local owner_dname = kdns.todname(parser.r_owner)
+		local rdata = ffi.string(parser.r_data, parser.r_data_length)
+		if not filter or filter(owner_dname, parser.r_type, parser.r_ttl, rdata) then
+			sink(owner_dname, parser.r_type, parser.r_ttl, rdata)
 		end
-		rr = stream()
 	end
 	return sink(nil)
 end
@@ -132,4 +142,5 @@ return {
 	printer = sink_print,
 	jsonify = sink_json,
 	table = sink_table,
+	set = sink_set,
 }

@@ -48,16 +48,16 @@ assert(rrset ~= nil)
 assert(rrset:owner() == '\3com')
 assert(rrset:class() == kdns.class.IN)
 assert(rrset:type()  == kdns.type.NS)
-assert(#rrset == 0)
+assert(rrset:count() == 0)
 rrset:add(kdns.rdata.ns('test'), 3600)
-assert(#rrset == 1)
+assert(rrset:count() == 1)
 assert(rrset:rdata(0) == '\4test\0')
 collectgarbage()
 local rrset_copy = rrset:copy()
 assert(rrset_copy ~= nil)
 assert(rrset_copy:owner() ~= rrset:owner())
 assert(kdns.dname.equals(rrset_copy:owner(), rrset:owner()))
-assert(#rrset_copy == #rrset)
+assert(rrset_copy:count() == rrset:count())
 rrset_copy = nil
 collectgarbage()
 print('[ OK ] kdns.rrset')
@@ -171,38 +171,22 @@ print('[ OK ] kdns.tsig')
 -- Test RR parser
 local rrparser = require('kdns.rrparser')
 local fname = 'examples/example.com.zone'
-local records = rrparser.parse_file(fname)
+local records = rrparser.file(fname)
 assert(records ~= nil)
 assert(#records == 10)
-print('[ OK ] kdns.rrparser.parsefile')
--- Parse file lines
-local rc = 0
+print('[ OK ] kdns.rrparser.file')
+-- Parse input text
 local parser = rrparser.new()
-for line in io.lines(fname) do
-	rc = parser:read(line .. '\n')
-	assert(rc == 0)
-	assert(parser.error_code == 0)
-end
-print('[ OK ] kdns.rrparser.lines')
--- Parse record (custom callbacks)
-parser = rrparser.new(function (p)
-	local rr = p:current_rr()
-	assert(rr.class == 1)
-	assert(rr.ttl == 3600)
-	assert(rr.owner == '\3foo\0')
-	assert(rr.rdata == '\3bar\0')
-end)
-rc = parser:read("foo. IN 3600 NS bar.\n")
-assert(rc == 0)
-assert(parser.error_code == 0)
-print('[ OK ] kdns.rrparser.read')
+assert(parser:parse("foo. IN 3600 NS bar.\n"))
+assert(parser.state == rrparser.state.DATA)
+assert(parser.error.code == 0)
+print('[ OK ] kdns.rrparser.parse')
 -- Parse file stream
 local parsed = 0
-local stream = rrparser.stream(fname)
-local rr = stream()
-while rr do
+local parser = rrparser.new()
+assert(parser:open(fname))
+while parser:parse() do
 	parsed = parsed + 1
-	rr = stream()
 end
 collectgarbage()
 assert(parsed == 10)
@@ -210,4 +194,24 @@ stream = nil
 rr = nil
 print('[ OK ] kdns.rrparser.stream')
 collectgarbage()
+-- Test utilities
+local utils = require('kdns.utils')
+local names = {
+	'example',
+	'a.example',
+	'yljkjljk.a.example',
+	'z.a.example',
+	'zabc.a.example',
+	'z.example',
+	'\001.z.example',
+	'*.z.example',
+	'\200.z.example',
+}
+for i = 1, #names do
+	names[i] = kdns.dname.parse(names[i])
+end
+for i = 1, #names - 1 do
+	assert(utils.dnamecmp(names[i], names[i + 1]) < 0)
+end
+print('[ OK ] kdns.utils.dnamecmp')
 print('[ OK ] kdns')

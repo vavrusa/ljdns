@@ -1,6 +1,7 @@
 #!/usr/bin/env luajit
 local kdns = require('kdns')
 local sift = require('kdns.sift')
+local utils = require('kdns.utils')
 -- Parameters
 local function help()
 	print(string.format('Usage: %s [options] [filter] [filter2] ... zonefile', arg[0]))
@@ -45,7 +46,7 @@ local sink = sift.printer()
 if format == 'json' then sink = sift.jsonify() end
 if sort then
 	if format ~= 'text' then error('cannot sort in other format than "text"') end
-	sink = sift.table()
+	sink = sift.set()
 end
 -- Filter stream
 local elapsed = timeit and kdns.io.now()
@@ -55,11 +56,13 @@ if not cap then
 end
 if timeit then
 	elapsed = kdns.io.now() - elapsed
-	io.stderr:write(string.format('; %.02f msec\n', elapsed * 1000.0))
+	io.stderr:write(string.format('; parsed in %.02f msec (%d records)\n', elapsed * 1000.0, #cap))
 end
 -- Sorted output
 if sort then
-	table.sort(cap, function (a,b) return a:owner():compare(b:owner()) < 0 end)
-	for i,v in ipairs(cap) do io.write(v:tostring()) end
+	cap:sort()
+	for i = 0, #cap - 1 do
+		io.write(cap.at[i]:tostring())
+	end
 end
 if type(cap) == 'string' then print(cap) end

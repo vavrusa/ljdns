@@ -9,7 +9,7 @@ local bor, band, bnot = bit.bor, bit.band, bit.bnot
 local C = ffi.C
 local utils = require('kdns.utils')
 local n16, n32 = utils.n16, utils.n32
-local knot = ffi.load(utils.dll_versioned('libknot', '1'))
+local knot = ffi.load(utils.dll_versioned('libknot', '2'))
 ffi.cdef[[
 
 /*
@@ -179,7 +179,7 @@ void free(void *ptr);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
 /* domain names */
 bool knot_dname_is_equal(const knot_dname_t *d1, const knot_dname_t *d2);
-int knot_dname_cmp(const knot_dname_t *d1, const knot_dname_t *d2);
+int knot_dname_lf(uint8_t *dst, knot_dname_t *src, const uint8_t *pkt);
 int knot_dname_size(const knot_dname_t *name);
 knot_dname_t *knot_dname_from_str(uint8_t *dst, const char *name, size_t maxlen);
 char *knot_dname_to_str(char *dst, const knot_dname_t *name, size_t maxlen);
@@ -297,12 +297,13 @@ local const_errcode_tsig = {
 }
 
 -- Metatype for domain name
+local dnamecmp = utils.dnamecmp
 local dname_buf = ffi.new(i8_vla, 256)
 local knot_dname_t = ffi.typeof('knot_dname_t')
 ffi.metatype( knot_dname_t, {
 	__new = function (ct, name, len)
 		assert(name)
-		local len = len and len or #name
+		len = len or #name
 		local dname = ffi.new(ct, len + 1)
 		ffi.copy(dname.bytes, name, len)
 		return dname
@@ -322,13 +323,13 @@ ffi.metatype( knot_dname_t, {
 		end,
 		equals = function(a, b)
 			assert(a)
-			if not b then return false end
+			if b == nil then return false end
 			return knot.knot_dname_is_equal(a, ffi.cast(void_p, b))
 		end,
 		compare = function(a, b)
 			assert(a)
-			if not b then return false end
-			return knot.knot_dname_cmp(a, ffi.cast(void_p, b))
+			if b == nil then return false end
+			return dnamecmp(a, b)
 		end,
 		parse = function(name)
 			assert(name)
@@ -368,7 +369,8 @@ ffi.metatype( knot_dname_t, {
 local rrparser = require('kdns.rrparser')
 local function rd_parse (rdata_str)
 	local parser = rrparser.new()
-	if parser:read('. 0 IN '..rdata_str..'\n') == 0 then
+	if parser:parse('. 0 IN '..rdata_str..'\n') then
+		utils.hexdump(ffi.string(parser.r_data, parser.r_data_length))
 		return ffi.string(parser.r_data, parser.r_data_length)
 	else return nil end
 end
@@ -394,25 +396,23 @@ ffi.metatype( knot_rrset_t, {
 		knot.knot_rrset_clear(rr, nil)
 	end,
 	__new = function (ct, owner, type, class)
-		if class == nil then class = const_class.IN end
-		-- @note RR set structure is managed by LuaJIT allocator, the owner and contents is
-		--       managed on the C side as GC is unaware of assignments in struct fields
-		local owner_copy = nil
-		if owner then owner_copy = knot.knot_dname_copy(ffi.cast(void_p, owner), nil) end
 		local rr = ffi.new(knot_rrset_t)
-		rr._owner = owner_copy
-		rr._type = type
-		rr._class = class
-		return rr
+		return rr:init(owner, type, class, true)
 	end,
-	__len = function(rr) assert(rr) return rr.rr.count end,
+	__lt = function (a, b) return knot_rrset_t.lt(a, b) end,
 	__tostring = function(rr)
 		return rr:tostring()
 	end,
 	__index = {
+		lt = function (a, b, bkey)
+			local ret = dnamecmp(a._owner, bkey or b._owner)
+			if ret == 0 then ret = a._type - b._type end
+			return ret < 0
+		end,
 		owner = function(rr)
 			-- Must check to convert NULL cdata to nil
-			assert(rr) if rr._owner ~= nil then return rr._owner else return nil end
+			assert(rr)
+			return rr._owner ~= nil and rr._owner
 		end,
 		type = function(rr)  assert(rr) return rr._type end,
 		class = function(rr) assert(rr) return rr._class end,
@@ -431,6 +431,9 @@ ffi.metatype( knot_rrset_t, {
 			local rdata = knot.knot_rdataset_at(rr.rr, i)
 			return ffi.string(knot.knot_rdata_data(rdata), knot.knot_rdata_rdlen(rdata))
 		end,
+		count = function (rr)
+			return tonumber(rr.rr.count)
+		end,
 		get = function(rr, i)
 			assert(rr)
 			return {owner = rr:owner(),
@@ -439,29 +442,37 @@ ffi.metatype( knot_rrset_t, {
 			        type = tonumber(rr:type()),
 			        rdata = rr:rdata(i)}
 		end,
+		init = function (rr, owner, type, class, noinit)
+			assert(rr)
+			if not noinit then knot.knot_rrset_clear(rr, nil) end
+			ffi.fill(rr.rr, ffi.sizeof(rr.rr))
+			rr._type = type
+			rr._class = class or const_class.IN
+			-- @note RR set structure is managed by LuaJIT allocator, the owner and contents is
+			--       managed on the C side as GC is unaware of assignments in struct fields
+			if owner then rr._owner = knot.knot_dname_copy(ffi.cast(void_p, owner), nil) end
+			return rr
+		end,
 		add = function(rr, rdata, ttl, rdlen)
 			assert(rr)
-			if ttl == nil then ttl = rr:ttl() end
-			if rdlen == nil then rdlen = #rdata end
-			local ret = knot.knot_rrset_add_rdata(rr, rdata, rdlen, ttl, nil)
-			return ret == 0 and rr or nil
+			ttl = ttl or rr:ttl()
+			rdlen = rdlen or #rdata
+			return knot.knot_rrset_add_rdata(rr, rdata, rdlen, ttl, nil) == 0 and rr
 		end,
 		copy = function (rr)
 			assert(rr)
 			local copy = knot_rrset_t(rr._owner, rr._type, rr._class)
-			if knot.knot_rdataset_copy(copy.rr, rr.rr, nil) ~= 0 then return nil end
-			return copy
+			return knot.knot_rdataset_copy(copy.rr, rr.rr, nil) == 0 and copy
 		end,
 		clear = function (rr)
 			assert(rr)
 			knot.knot_rdataset_clear(rr.rr, nil)
 		end,
-		tostring = function(rr)
+		tostring = function(rr, buf)
 			assert(rr)
 			if rr.rr.count > 0 then
 				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
-				if ret < 0 then return nil end
-				return ffi.string(rrset_buf)
+				return ret >= 0 and ffi.string(rrset_buf)
 			else
 				return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
 			end

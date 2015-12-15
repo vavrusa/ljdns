@@ -7,6 +7,7 @@ end
 local socket = require('socket')
 local ffi = require('ffi')
 local n16 = require('kdns.utils').n16
+local poll = socket.select
 
 -- Return appropriate socket implementation
 local function getsocket(addr, tcp)
@@ -75,6 +76,67 @@ local function client_recv(sock)
 			ret = sock:receive(len)
 		end
 		return ret
+	end
+end
+
+-- Asynchronous I/O callbacks
+local function async_write(socket, msg, len)
+	table.insert(writers, socket)
+	coroutine.yield()
+	client_send(socket, msg, len)
+end
+local function async_recv(socket)
+	coroutine.yield()
+	return client_recv(socket)
+end
+local function async_remove(sockets, reverse, pending, s)
+	table.remove(sockets, reverse[s])
+	reverse[s] = nil
+	pending[s] = nil
+	s:close()
+end
+local function async_add(sockets, reverse, pending, s)
+	reverse[s] = #sockets + 1
+	pending[s] = co
+	table.insert(sockets, s)
+end
+local function async_resume(sockets, reverse, pending, s)
+	local ok = coroutine.resume(pending[s])
+	if not ok or coroutine.status(pending[s]) == 'dead' then
+		async_remove(sockets, reverse, pending, s)
+		return false
+	end
+	return true
+end
+
+local function asio_init(sockets)
+	-- Prepare socket set and reverse mapping
+	local reverse, listeners, writers, pending = {}, {}, {}, {}
+	local context = { writers }
+	for i, s in ipairs(sockets) do listeners[s] = true end
+	-- Return closure with asynchronous I/O step
+	return function (timeout)
+		-- Poll active sockets
+		local readable, writeable = poll(sockets, writers, timeout)
+		writers = {}
+		-- Process all readable
+		for i, s in ipairs(readable) do
+			if listeners[s] then
+				local client = s:accept()
+				local co = coroutine.create(on_recv)
+				co:resume(context, client)
+				if coroutine.status(co) ~= 'dead' then
+					async_add(sockets, reverse, pending, client)
+				else
+					client:close()
+				end
+			else async_resume(sockets, reverse, pending, s) end
+		end
+		-- Process all writeable
+		for i, s in ipairs(writeable) do
+			async_resume(sockets, reverse, pending, s)
+		end
+		return true
 	end
 end
 
