@@ -55,7 +55,7 @@ assert(rrset:rdata(0) == '\4test\0')
 collectgarbage()
 local rrset_copy = rrset:copy()
 assert(rrset_copy ~= nil)
-assert(rrset_copy:owner() ~= rrset:owner())
+assert(rrset_copy:owner() == rrset:owner())
 assert(kdns.dname.equals(rrset_copy:owner(), rrset:owner()))
 assert(rrset_copy:count() == rrset:count())
 rrset_copy = nil

@@ -89,19 +89,6 @@ print(dname:lower())
 if dname:within('\3com') then print('child of com.') end
 ```
 
-Domain names (and other following types) are cdata objects, keep in mind that their direct comparison is identity check.
-
-```lua
-local a, b = kdns.dname('\2cz'), kdns.dname('\2cz')
--- Identity check: they have same contents, but they are different objects
-assert(a == b) -- FAIL
-assert(a == a) -- OK
--- Equivalence check: compare their contents with dname.equals
-assert(kdns.dname.equals(a, b)) -- OK
-assert(a:equals('\3com')) -- FAIL
-assert(a:equals(b)) -- OK
-```
-
 RDATA
 -----
 

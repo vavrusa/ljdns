@@ -119,7 +119,7 @@ typedef struct {
 } knot_dump_style_t;
 typedef int knot_section_t; /* Do not touch */
 typedef void knot_rrinfo_t; /* Do not touch */
-typedef struct { uint8_t bytes[?]; } knot_dname_t;
+typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
 typedef uint8_t knot_rdata_t;
 typedef struct knot_rdataset {
 	uint16_t count;
@@ -175,18 +175,18 @@ typedef struct {
 } tsig_t;
 /* libc */
 void free(void *ptr);
+int memcmp(const void *a, const void *b, size_t len);
 /* descriptors */
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
 /* domain names */
-bool knot_dname_is_equal(const knot_dname_t *d1, const knot_dname_t *d2);
-int knot_dname_lf(uint8_t *dst, knot_dname_t *src, const uint8_t *pkt);
-int knot_dname_size(const knot_dname_t *name);
+int knot_dname_lf(uint8_t *dst, uint8_t *src, const uint8_t *pkt);
 knot_dname_t *knot_dname_from_str(uint8_t *dst, const char *name, size_t maxlen);
-char *knot_dname_to_str(char *dst, const knot_dname_t *name, size_t maxlen);
-int knot_dname_to_lower(knot_dname_t *name);
+char *knot_dname_to_str(char *dst, const uint8_t *name, size_t maxlen);
+int knot_dname_to_lower(uint8_t *name);
 int knot_dname_labels(const uint8_t *name, const uint8_t *pkt);
-bool knot_dname_in(const knot_dname_t *domain, const knot_dname_t *sub);
-knot_dname_t *knot_dname_copy(const knot_dname_t *name, void /* mm_ctx_t */ *mm);
+bool knot_dname_in(const uint8_t *domain, const uint8_t *sub);
+knot_dname_t *knot_dname_copy(const uint8_t *name, void /* mm_ctx_t */ *mm);
+int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uint8_t *pkt);
 /* resource records */
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
@@ -297,7 +297,7 @@ local const_errcode_tsig = {
 }
 
 -- Metatype for domain name
-local dnamecmp = utils.dnamecmp
+local dnamecmp, dnamelen = utils.dnamecmp, utils.dnamelen
 local dname_buf = ffi.new(i8_vla, 256)
 local knot_dname_t = ffi.typeof('knot_dname_t')
 ffi.metatype( knot_dname_t, {
@@ -305,64 +305,70 @@ ffi.metatype( knot_dname_t, {
 		assert(name)
 		len = len or #name
 		local dname = ffi.new(ct, len + 1)
-		ffi.copy(dname.bytes, name, len)
+		-- Check input wire format, malformed names must not be passed through this point
+		if knot.knot_dname_unpack(dname.bytes, name, len + 1, nil) <= 0 then
+			dname = nil
+		end
 		return dname
 	end,
 	__tostring = function(dname)
-		assert(dname)
 		return dname:tostring()
 	end,
 	__len = function(dname)
-		assert(dname)
-		return knot.knot_dname_size(dname)
+		return dname:len()
 	end,
-	__index = {
-		copy = function(dname)
-			assert(dname)
-			return knot_dname_t(dname.bytes, #dname)
-		end,
-		equals = function(a, b)
-			assert(a)
-			if b == nil then return false end
-			return knot.knot_dname_is_equal(a, ffi.cast(void_p, b))
-		end,
-		compare = function(a, b)
-			assert(a)
-			if b == nil then return false end
-			return dnamecmp(a, b)
-		end,
-		parse = function(name)
-			assert(name)
-			local dname = knot.knot_dname_from_str(dname_buf, name, 255)
-			if dname == nil then return nil end
-			return knot_dname_t(dname.bytes, #dname)
-		end,
-		lower = function(dname) -- Copy to make sure it's safely mutable
-			assert(dname)
-			local copy = dname:copy()
-			knot.knot_dname_to_lower(copy)
-			return copy
-		end,
-		labels = function(dname)
-			assert(dname)
-			return knot.knot_dname_labels(ffi.cast(void_p, dname), nil)
-		end,
-		within = function(dname, parent)
-			assert(dname)
-			return knot.knot_dname_in(ffi.cast(void_p, parent), dname)
-		end,
-		parentof = function(dname, child)
-			assert(dname)
-			return knot.knot_dname_in(dname, ffi.cast(void_p, child))
-		end,
-		tostring = function(dname)
-			assert(dname)
-			return ffi.string(knot.knot_dname_to_str(dname_buf, dname, 255))
-		end
-	},
 	__eq = function(a, b)
 		return a:equals(b)
 	end,
+	__index = {
+		copy = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			return knot_dname_t(dname.bytes, #dname)
+		end,
+		equals = function(a, b)
+			if b == nil then return false end		
+			-- RHS may be Lua string, but then it need to be converted
+			-- for dname wire check, this is slower than comparing casted values
+			if type(b) == 'string' then b = knot_dname_t(b) end
+			local l1, l2 = a:len(), b:len()
+			return l1 == l2 and C.memcmp(a.bytes, b.bytes, l1)
+		end,
+		compare = function(a, b)			
+			if b == nil then return false end
+			assert(ffi.istype(knot_dname_t, a))
+			return dnamecmp(a, b)
+		end,
+		parse = function(name)
+			local dname = knot.knot_dname_from_str(dname_buf, name, 255)
+			if dname == nil then return nil end
+			return knot_dname_t(dname[0].bytes, #dname[0])
+		end,
+		lower = function(dname) -- Copy to make sure it's safely mutable
+			local copy = dname:copy()
+			knot.knot_dname_to_lower(copy.bytes)
+			return copy
+		end,
+		len = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			return (dnamelen(dname))
+		end,
+		labels = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			return knot.knot_dname_labels(dname.bytes, nil)
+		end,
+		within = function(dname, parent)
+			assert(ffi.istype(knot_dname_t, dname))
+			if ffi.istype(knot_dname_t, parent) then parent = parent.bytes end
+			return knot.knot_dname_in(ffi.cast(u8_p, parent), dname.bytes)
+		end,
+		parentof = function(dname, child)
+			return child:within(dname)
+		end,
+		tostring = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			return ffi.string(knot.knot_dname_to_str(dname_buf, dname.bytes, 255))
+		end
+	},
 })
 
 -- RDATA parser
@@ -370,7 +376,6 @@ local rrparser = require('kdns.rrparser')
 local function rd_parse (rdata_str)
 	local parser = rrparser.new()
 	if parser:parse('. 0 IN '..rdata_str..'\n') then
-		utils.hexdump(ffi.string(parser.r_data, parser.r_data_length))
 		return ffi.string(parser.r_data, parser.r_data_length)
 	else return nil end
 end
@@ -399,25 +404,28 @@ ffi.metatype( knot_rrset_t, {
 		local rr = ffi.new(knot_rrset_t)
 		return rr:init(owner, type, class, true)
 	end,
-	__lt = function (a, b) return knot_rrset_t.lt(a, b) end,
+	__lt = function (a, b) return a:lt(a, b) end,
 	__tostring = function(rr)
 		return rr:tostring()
 	end,
 	__index = {
 		lt = function (a, b, bkey)
-			local ret = dnamecmp(a._owner, bkey or b._owner)
-			if ret == 0 then ret = a._type - b._type end
+			assert(ffi.istype(knot_rrset_t, a))
+			assert(ffi.istype(knot_rrset_t, b))
+			local ret = dnamecmp(a:owner(), bkey or b:owner())
+			if ret == 0 then return a._type < b._type end
 			return ret < 0
 		end,
 		owner = function(rr)
 			-- Must check to convert NULL cdata to nil
-			assert(rr)
-			return rr._owner ~= nil and rr._owner
+			assert(ffi.istype(knot_rrset_t, rr))
+			if rr._owner == nil then return nil end
+			return rr._owner[0]
 		end,
-		type = function(rr)  assert(rr) return rr._type end,
-		class = function(rr) assert(rr) return rr._class end,
+		type = function(rr) return rr._type end,
+		class = function(rr) return rr._class end,
 		ttl = function(rr, ttl)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			if rr.rr.count > 0 then
 				if ttl ~= nil then
 					local rd = knot.knot_rdataset_at(rr.rr, 0)
@@ -427,7 +435,7 @@ ffi.metatype( knot_rrset_t, {
 			else return 0 end
 		end,
 		rdata = function(rr, i)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			local rdata = knot.knot_rdataset_at(rr.rr, i)
 			return ffi.string(knot.knot_rdata_data(rdata), knot.knot_rdata_rdlen(rdata))
 		end,
@@ -435,7 +443,7 @@ ffi.metatype( knot_rrset_t, {
 			return tonumber(rr.rr.count)
 		end,
 		get = function(rr, i)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			return {owner = rr:owner(),
 			        ttl = rr:ttl(),
 			        class = tonumber(rr:class()),
@@ -443,7 +451,7 @@ ffi.metatype( knot_rrset_t, {
 			        rdata = rr:rdata(i)}
 		end,
 		init = function (rr, owner, type, class, noinit)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			if not noinit then knot.knot_rrset_clear(rr, nil) end
 			ffi.fill(rr.rr, ffi.sizeof(rr.rr))
 			rr._type = type
@@ -454,22 +462,22 @@ ffi.metatype( knot_rrset_t, {
 			return rr
 		end,
 		add = function(rr, rdata, ttl, rdlen)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			ttl = ttl or rr:ttl()
 			rdlen = rdlen or #rdata
 			return knot.knot_rrset_add_rdata(rr, rdata, rdlen, ttl, nil) == 0 and rr
 		end,
 		copy = function (rr)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			local copy = knot_rrset_t(rr._owner, rr._type, rr._class)
 			return knot.knot_rdataset_copy(copy.rr, rr.rr, nil) == 0 and copy
 		end,
 		clear = function (rr)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			knot.knot_rdataset_clear(rr.rr, nil)
 		end,
 		tostring = function(rr, buf)
-			assert(rr)
+			assert(ffi.istype(knot_rrset_t, rr))
 			if rr.rr.count > 0 then
 				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				return ret >= 0 and ffi.string(rrset_buf)
