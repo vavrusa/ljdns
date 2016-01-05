@@ -214,7 +214,7 @@ local wire = pkt:towire()
 ```
 
 EDNS
-~~~~
+----
 
 The EDNS OPT is a special type of RR, because it uses its fields for a different purpose. The library treats it as a RR with only minimal hand-holding, but provides a handful of convenience functions. It also **MUST** be the last RR in the ADDITIONAL section (with the exception of TSIG). This is where you can set maximum UDP payload and `DO` bit to signalize DNSSEC OK.
 
@@ -260,7 +260,7 @@ end
 ```
 
 TSIG
-~~~~
+----
 
 TSIG is not a property of packet but a pairing of TSIG key with a signer state. It has two operations - *sign()*, and *verify()* and keeps digest state between requests. This means that if you verify a query and use the same TSIG for signing response, it will remember the query digest for signing.
 
@@ -281,7 +281,7 @@ assert(tsig_client:verify(answer))
 ```
 
 Caveats
-~~~~~~~
+-------
 
 There is a caveat with packet parsing, as LuaJIT [doesn't GC cdata](http://luajit.org/ext_ffi_semantics.html#gc), the Lua string with a wire must be referenced during the lifetime of the packet.
 
@@ -373,6 +373,11 @@ for line in io.lines('example.com.zone') do
 	end
 end
 ```
+
+Zone sifting
+------------
+
+TBD
 
 [LuaJIT FFI]: http://luajit.org/ext_ffi.html
 [LuaJIT]: http://luajit.org
