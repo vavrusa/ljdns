@@ -3,24 +3,29 @@ LUA ?= luajit
 ABIVER ?= 5.1
 PREFIX_LMOD ?= $(PREFIX)/share/lua/$(ABIVER)
 INSTALL ?= install
+CFLAGS ?= -O2 -g -fPIC
+LIBEXT := so
 
 # Scripts and extras
 OBJS := kdns
 LIBS := $(addsuffix .lua,$(OBJS))
-EXTRA := kdns/utils.lua kdns/io.lua kdns/rrparser.lua
+EXTRA := kdns/utils.lua kdns/io.lua kdns/rrparser.lua kdns/sift.lua
+CLIB := kdns_clib.$(LIBEXT)
 
 # Rules
 all: check
 check: $(addsuffix .test,$(OBJS))
+$(CLIB): src/utils.c
+	$(CC) $(CFLAGS) -shared $< -o $(CLIB)
 install:
 	$(INSTALL) -d $(PREFIX_LMOD)/kdns
 	$(INSTALL) $(EXTRA) $(PREFIX_LMOD)/kdns
-	$(INSTALL) $(LIBS) $(PREFIX_LMOD)/
+	$(INSTALL) $(LIBS) $(CLIB) $(PREFIX_LMOD)/
 uninstall:
-	rm -f $(addprefix $(PREFIX_LMOD)/,$(EXTRA) $(LIBS))
+	rm -f $(addprefix $(PREFIX_LMOD)/,$(EXTRA) $(LIBS)) $(CLIB)
 	rmdir $(PREFIX_LMOD)/kdns
 
-%.test: %.test.lua
+%.test: %.test.lua $(CLIB)
 	$(LUA) $<
 
 .PHONY: all check install uninstall
