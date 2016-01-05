@@ -84,9 +84,11 @@ local function makefilter(query)
 end
 
 local function sink_print()
+	local count = 0
 	return function (owner, rtype, ttl, rdata)
-		if not owner then return true end
+		if not owner then return count end
 		io.write(kdns.rrset(owner, rtype):add(rdata, ttl):tostring())
+		count = count + 1
 	end
 end
 

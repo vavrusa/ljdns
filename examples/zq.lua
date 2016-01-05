@@ -55,8 +55,12 @@ if not cap then
 	error(err)
 end
 if timeit then
+	local nrr = 0
+	if     type(cap) == 'number' then nrr = cap
+	elseif type(cap) == 'table'  then nrr = #cap
+	end
 	elapsed = kdns.io.now() - elapsed
-	io.stderr:write(string.format('; parsed in %.02f msec (%d records)\n', elapsed * 1000.0, #cap))
+	io.stderr:write(string.format('; parsed in %.02f msec (%d records)\n', elapsed * 1000.0, nrr))
 end
 -- Sorted output
 if sort then
