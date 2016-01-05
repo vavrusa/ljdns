@@ -40,6 +40,7 @@ local function makefilter(query)
 				meta = 'parentof'
 			end
 			owner = kdns.dname.parse(owner)
+			-- TODO(marek): fuzzy search with N allowed edit distance
 			fuzzy = tonumber(fuzzy)
 			table.insert(farg, owner)
 			table.insert(filters, string.format('(%sargs[%d]:%s(owner))', opref, #farg, meta))

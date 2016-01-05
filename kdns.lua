@@ -244,6 +244,7 @@ local void_p = ffi.typeof('void *')
 local u8_p = ffi.typeof('uint8_t *')
 local u16_p = ffi.typeof('uint16_t *')
 local int_t = ffi.typeof('int')
+local intptr_t = ffi.typeof('intptr_t')
 local i8_vla = ffi.typeof('char [?]')
 local u8_vla = ffi.typeof('uint8_t [?]')
 local size_vla = ffi.typeof('size_t [?]')
@@ -409,11 +410,11 @@ ffi.metatype( knot_rrset_t, {
 		return rr:tostring()
 	end,
 	__index = {
-		lt = function (a, b, bkey)
+		lt = function (a, b)
 			assert(ffi.istype(knot_rrset_t, a))
 			assert(ffi.istype(knot_rrset_t, b))
-			local ret = dnamecmp(a:owner(), bkey or b:owner())
-			if ret == 0 then return a._type < b._type end
+			local ret = dnamecmp(a:owner(), b:owner())
+			if ret == 0 then ret = a._type - b._type end
 			return ret < 0
 		end,
 		owner = function(rr)

@@ -15,16 +15,17 @@ elapsed = kdns.io.now() - elapsed
 print(string.format('sort: in %.02f msec', elapsed * 1000.0))
 -- Perform random queries
 local queries = {}
-for i = 1, 10 do
+local N = 16
+for i = 1, N do
 	local qname = set.at[math.random(0, #set - 1)]:owner()
-	table.insert(queries, utils.dnamekey(qname))
+	table.insert(queries, qname)
 end
 local searcher = set:searcher()
 elapsed = kdns.io.now()
-for i = 0, 1000000 do
-	local qname = queries[(i % 10) + 1]
+for i = 0, 100000 do
+	local qname = queries[i % N + 1]
 	local found = searcher(qname)
-	-- assert(qname:equals(found:owner()))
+	assert(qname:equals(found:owner()))
 end
 elapsed = kdns.io.now() - elapsed
-print(string.format('search: %d ops/sec', 1000000 / elapsed))
+print(string.format('search: %d ops/sec', 100000 / elapsed))

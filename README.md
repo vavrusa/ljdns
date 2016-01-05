@@ -337,7 +337,10 @@ local answer = kdns.io.recv(tcp_sock)
 Zone files
 ----------
 
-For example, you can parse the zone file into a table of records.
+The library comes with a RFC1035 zone file parser with a very simple API.
+If you want to build something resembling a sorted record set or filter it, skip to the next section.
+
+You can parse the zone file into a table of records.
 
 ```lua
 local rrparser = require('kdns.rrparser')
@@ -347,37 +350,163 @@ for i, rr in ipairs(records) do
 end
 ```
 
-Or parse input by chunks, see [zscanner structure][zscanner-api] for reference.
+Or parse zone file into a stream of records, see [zscanner structure][zscanner-api] for reference.
+This is much faster for large zones, as it doesn't require you store and copy every record.
 
 ```lua
 local parser = rrparser.new()
-local rc = parser:read('foo. 3600 IN A 1.2.3.4\n')
-if rc == 0 then
-	print(parser.r_type, parser.r_data_length)
+assert(parser:open(zonefile))
+while parser:parse() do
+	print(kdns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
+	-- Build a real RRSet
+	local owner = kdns.todname(parser.r_owner, parser.r_owner_length)
+	local rr = kdns.rrset(owner, parser.r_type)
+	rrset:add(ffi.string(parser.r_data, parser.r_data_length), parser.r_ttl)
 end
 ```
 
-Or use callbacks for multiple chunks.
+The same interface can be also used for parsing zones from strings.
 
 ```lua
-local addr_records = {}
-local parser = rrparser.new(function (parser)
-	if parser.r_type == 1 then
-		table.insert(addr_records, parser:current_rr())
-	end
-end)
-for line in io.lines('example.com.zone') do
-	local rc = parser:read(line .. '\n')
-	if rc ~= 0 then
-		error('line', parser.line_counter, parser:last_error())
-	end
+local parser = rrparser.new()
+local ok, err = parser:parse('foo. 3600 IN A 1.2.3.4\n')
+if ok then
+	print(kdns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
+else
+	print(err)
 end
 ```
 
 Zone sifting
 ------------
 
-TBD
+Sift is a higher-level interface over zone parser that allows you to either filter the results
+using your own or predefined filters, and capture the results. This can be used to build a sorted
+set of RR sets, i.e. a *"zone"*.
+
+The results can be either captured as a sorted set in memory, printed out, converted to JSON,
+or passed to caller-provided closure for custom processing.
+
+```lua
+local sift = require('kdns.sift')
+-- Print records in the zone
+sift.zone(zone, sift.printer())
+-- Load text zone into JSON
+local cap, err = sift.zone(zone, sift.jsonify())
+-- Load text zone into sorted set
+local set, err = sift.zone(zone, sift.set())
+if not set then error(err) end
+```
+
+The sorted set is structured, so we can perform further actions with it like sort/resort or lookups.
+Note that the set is sorted in terms of [RFC4034](https://tools.ietf.org/html/rfc4034#section-6.1) canonical name ordering and may be used for DNSSEC purposes.
+
+```lua
+-- Sort the set captured from previous example
+set:sort()
+-- Search a name, the result is a lesser or equal RR
+-- This allows searching for exact match or predecessor
+local query = kdns.dname('\5query\3com')
+local rr = set:search(query)
+if rr and query:equals(rr:owner()) then
+	print('result:', rr)
+end
+-- Fetch a searcher closure specialized to current set length
+-- This allows a faster search if the set size doesn't change
+local searcher = set:searcher()
+local rr = searcher(qname)
+```
+
+Filter algebra
+==============
+
+The second part of sifting is filtering functionality. This is where LuaJIT shines,
+as it can compile the filter into efficient machine code on runtime.
+
+```lua
+-- Filter all records at/below "query.is"
+sift.zone(zone, sift.printer(), sift.makefilter('*.query.is'))
+-- Chain filters with logical AND
+sift.zone(zone, sift.printer(), sift.makefilter({'*.query.is', 'type=SOA'}))
+```
+
+Each filter has field, operator and operand. The field may be implicit
+in some cases, i.e. expressions `*.query.is` and `owner=*.query.is` have the same meaning.
+Same for `SOA` and `type=SOA` for known DNS record types.
+
+The algebra supports most Lua comparison operators: `=, ~=, <, <=, >, >=`.
+For example `ttl<=60` requires TTL to be lesser or equal than 60s,
+and `owner=query.is` matches only RRs with equivalent owner.
+
+Examples:
+
+```lua
+owner=*.query.is -- Match all names at/below query.is
+owner~=query.is  -- Match all names except query.is
+type=NS          -- Match all records with NS type
+type~=RRSIG      -- Match all records except RRSIGs
+ttl<=3600        -- Match all records with TTL lower or equal 1h
+```
+
+The filter may also search the righthand-side of the record by looking for
+patterns in RDATA. It is possible to look for textual representation or
+pattern in wire format. For example:
+
+```lua
+-- Match A records whose address is 1.2.3.4
+rdata=A(1.2.3.4)
+-- Match NS records with "query.is" found in target
+rdata=NS(query.is)
+```
+
+These are **not** equivalence matches, but a pattern search. The `NS(query.is)` would match
+all of the following:
+
+```
+example.            	3600	NS	ns.query.is.
+example.            	3600	NS	a.ns.query.is.
+example.            	3600	NS	query.is.
+```
+
+But not theses:
+
+```
+example.            	3600	NS	query.is.bad.
+```
+
+This is because the `NS(query.is)` searches for pattern `\5query\2is\0` because a domain name must be
+root-label terminated. This is useful because it can be used to find targets matching name, and all it's
+children.
+
+If you want to search for pattern in RDATA in wire format, do not prefix it with the type for interpretation.
+For example:
+
+```
+rdata=\x02cz        -- Match all RDATA containing "\2cz" in wire format
+rdata~=\x01\x02\x03 -- Match all RDATA *not* containing a sequence of bytes
+```
+
+A real world example would be to find all domains, that are hosted at `hoster.is`.
+
+```lua
+sift.zone(zone, sift.printer(), sift.makefilter('NS(hoster.is)'))
+```
+
+Performance
+===========
+
+LuaJIT 2.1+ is recommended for performance reasons. To get a rough idea about the performance on your
+zone, use the `examples/bench.lua` script. Here's an example on a synthetic zone with 1 million records:
+
+```lua
+$ luajit examples/bench.lua zones/example.com.1m 
+load: 683.11 msec (1000010 rrs)
+sort: in 1234.42 msec
+search: 923914 ops/sec
+```
+
+This means it parsed and loaded a zone with million records into memory under 2 seconds, and is able to perform
+nearly 1M lookups per second on my laptop.
 
 [LuaJIT FFI]: http://luajit.org/ext_ffi.html
 [LuaJIT]: http://luajit.org

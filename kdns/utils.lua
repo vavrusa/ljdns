@@ -13,7 +13,6 @@ function utils.dll_versioned(lib, ver)
 	return string.format(fmt[jit.os], lib, ver)
 end
 
-
 -- Hexdump from http://lua-users.org/wiki/HexDump
 function utils.hexdump(buf)
 	if buf == nil then return nil end
@@ -26,6 +25,12 @@ function utils.hexdump(buf)
 	end
 end
 
+-- FFI + C code
+local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
+ffi.cdef[[
+int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
+]]
+
 -- Byte order conversions
 local function n32(x) return x end
 local n16 = n32
@@ -37,55 +42,22 @@ utils.n32 = n32
 utils.n16 = n16
 local rshift,bxor,arshift,band = bit.rshift,bit.bxor,bit.arshift,bit.band
 
-local function lg2(a)
-    local c = 0
-    while a > 0 do
-        a = rshift(a, 1)
-        c = c + 1
-    end
-    return c - 1
-end
-
--- Branch-free number selector for min/max/alter
--- This is of course more costly (5 instructions + narrowing) than conditional jump,
--- but avoids side traces in tight loops (where dnamecmp is used)
-local function choose(x,y,xx,yy)
-	return (bxor(band(arshift(x-y, 31), bxor(xx, yy)), yy))
-end
-local function min(x,y) return choose(x,y,x,y) end
-local function max(x,y) return choose(x,y,y,x) end
-
 -- Domain name wire length
 local function dnamelen(dname)
 	local p, i = dname.bytes, 0
 	while p[i] ~= 0 do
 		i = i + p[i] + 1
 	end
-	return i + 1 -- Count terminal label
-end
-
--- Domain name in lookup format
-local dnamekey_t = ffi.typeof('uint8_t [256]')
-local C, knot = ffi.C, ffi.load(utils.dll_versioned('libknot', '2'))
-local function dnamekey(dname, dst)
-	dst = dst or dnamekey_t()
-	knot.knot_dname_lf(dst, dname.bytes, nil)
-	return dst
+	return i + 1 -- Add label count
 end
 
 -- Canonically compare domain wire name / keys
-local lhs_dk, rhs_dk = dnamekey_t(), dnamekey_t()
 local function dnamecmp(lhs, rhs)
-	local lkey = ffi.istype(dnamekey_t, lhs) and lhs or dnamekey(lhs, lhs_dk)
-	local rkey = ffi.istype(dnamekey_t, rhs) and rhs or dnamekey(rhs, rhs_dk)
-	local ret = C.memcmp(lkey + 1, rkey + 1, min(lkey[0], rkey[0]))
-	if ret == 0 then ret = lkey[0] - rkey[0] end
-	return ret
+	return cutil.dnamecmp(lhs.bytes, rhs.bytes)
 end
 
 -- Export dname comparators
 utils.dnamelen = dnamelen
-utils.dnamekey = dnamekey
 utils.dnamecmp = dnamecmp
 
 -- Sort FFI array (0-indexed) using bottom-up heapsort adapted from GSL-shell [1]
@@ -99,7 +71,7 @@ function utils.sort(array, len)
 	local tmpval = ffi.cast(ffi.typeof(array[0]), buf)
 	local lshift = bit.lshift
 
-	local function sift(hole, len, skey)
+	local function sift(hole, len)
 		local top, j = hole, hole
 		-- Trace a path of maximum children (leaf search)
 		while lshift(j + 1, 1) < len do
@@ -116,7 +88,7 @@ function utils.sort(array, len)
 		end
 		-- Sift the original element one level up (Floyd's version)
 		j = rshift(hole - 1, 1)
-		while top < hole and array[j]:lt(tmpval, skey) do
+		while top < hole and array[j]:lt(tmpval) do
 			ffi.copy(array + hole, array + j, elmsize)
 			hole = j
 			j = rshift(j - 1, 1)
@@ -130,26 +102,24 @@ function utils.sort(array, len)
 		sift(i, len, nil)
 	end
 	-- Sort heap
-	local tmpval_dk = dnamekey_t()
 	for i = len - 1, 1, -1 do
 		ffi.copy(tmpval, array + i, elmsize)
 		ffi.copy(array + i, array, elmsize)
-		dnamekey(tmpval:owner(), tmpval_dk) -- Cache tmp dname key
-		sift(0, i, tmpval_dk)
+		sift(0, i, nil)
 	end
 end
 
 -- Binary search
 local function bsearch(array, len, owner, steps)
-	-- Hoist the dname search key
-	if not ffi.istype(dnamekey_t, owner) then owner = dnamekey(owner, rhs_dk) end
 	-- Number of steps is specialized, this allows unrolling
-	if not steps then steps = lg2(len) end
+	if not steps then steps = math.log(len, 2) end
 	local low = 0
-	for i = 0, steps do
-		len = rshift(len + 1, 1)
+	for i = 1, steps do
+		len = rshift(len, 1)
 		local r1 = dnamecmp(array[low + len]:owner(), owner)
-		if r1 <= 0 then low = low + len end
+		if     r1  < 0 then low = low + len + 1
+		elseif r1 == 0 then return array[low + len]
+		end
 	end
 	return array[low]
 end
@@ -157,29 +127,30 @@ end
 -- Binary search closure
 local function bsearcher(array, len)
 	-- Number of steps can be precomputed
-	local steps = lg2(len)
+	local steps = math.log(len, 2)
 	return function (owner)
 		return bsearch(array, len, owner, steps)
 	end
 	-- Generate force unrolled binary search for this table length
-	-- local steps = lg2(len)
-	-- local code = {[[
+	-- local code = [[
 	-- return function (array, m1, key, dnamecmp)
 	-- local low = 0
-	-- ]]}
-	-- for i = 0, steps do
-	-- 	table.insert(code, [[
+	-- ]]
+	-- local m1 = len
+	-- for i = 1, steps do
 	-- 	m1 = m1 / 2
-	-- 	local r1 = dnamecmp(array[low+m1]:owner(), key)
-	-- 	if r1 <= 0 then low = low + m1 end
-	-- 	]])
+	-- 	code = code .. string.format([[
+	-- 	if dnamecmp(array[low + %d]:owner(), key) <= 0 then
+	-- 		low = low + %d
+	-- 	end
+	-- 	]], m1, m1)
+		
 	-- end
-	-- table.insert(code, 'return array[low] end')
+	-- code = code .. 'return array[low] end'
 	-- -- Compile and wrap in closure with current upvalues
-	-- code = loadstring(table.concat(code))()
+	-- code = loadstring(code)()
 	-- return function (owner)
-	-- 	local key = ffi.istype(dnamekey_t, owner) and owner or dnamekey(owner, rhs_dk)
-	-- 	return code(array, len, key, dnamecmp)
+	-- 	return code(array, len, owner, dnamecmp)
 	-- end
 end
 utils.bsearch = bsearch

@@ -64,6 +64,7 @@ local function async_serve(socket)
 	local zonefile = pile..qname:gsub('/', '_')..'zone'
 	-- Start streaming answer
 	print(string.format('[%s] streaming to %s#%d', zonefile, socket:getpeername()))
+	-- @TODO: rewrite to sift
 	local answer = kdns.packet(16384+4096)
 	query:toanswer(answer)
 	local tstart = nio.now()
