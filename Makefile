@@ -3,7 +3,7 @@ LUA ?= luajit
 ABIVER ?= 5.1
 PREFIX_LMOD ?= $(PREFIX)/share/lua/$(ABIVER)
 INSTALL ?= install
-CFLAGS ?= -O2 -g -fPIC
+CFLAGS ?= -std=c99 -O2 -g -fPIC
 LIBEXT := so
 
 # Scripts and extras

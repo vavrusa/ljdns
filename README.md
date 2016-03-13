@@ -1,30 +1,22 @@
-The DNS library for LuaJIT
-==========================
+# The DNS library for LuaJIT
 
 A contemporary DNS library using [LuaJIT FFI] focused on performance, and a lightning-fast [zone file parser][zscanner].
-It supports all widely used DNS records (DNSSEC included) with a lean and mean API, including DNS primitives, messages and I/O.
+It supports all widely used DNS records (DNSSEC included) with a lean and mean API, including DNS primitives, messages and asynchronous I/O (including coroutines, TCP Fast Open and SO_REUSEPORT).
 
-Requirements
-------------
-
-- [LuaJIT 2.x][libknot] - PUC-RIO Lua doesn't have the FFI module.
-- [libknot][libknot] - isn't bundled, and must be [installed separately][knot-readme].
-
-Installation
-------------
+## Installation
 
 ```bash
 make check
 make install
 ```
 
-Performance
------------
+### Requirements
 
-Performance is good, no measurements yet.
+- [LuaJIT 2.x][libknot] - PUC-RIO Lua doesn't have the FFI module.
+- [libknot][libknot] - isn't bundled, and must be [installed separately][knot-readme].
 
-Constants
----------
+
+## Constants
 
 There are numeric constants for DNS classes, types, opcodes and rcodes. Since they're constants, LuaJIT can inline them. You can convert them back to the text representation with `kdns.tostring`.
 
@@ -43,8 +35,7 @@ print(kdns.rcode.NXDOMAIN)
 print(kdns.section.ANSWER)
 ```
 
-RR types
---------
+## RR types
 
 Record types are declared as numeric constants in `kdns.type` table. There are symbolic constants for all used RR types as of today (not deprecated). For unknown/custom types, simply use their numeric value.
 
@@ -61,8 +52,7 @@ print(kdns.tostring.type[1]) -- "A"
 print(kdns.tostring.type[55555]) -- "TYPE55555"
 ```
 
-Domain names
-------------
+## Domain names
 
 Domain names are stored in a wire format as a sequence of labels prefixed by their length.
 The library supports conversion between textual representation and wire format.
@@ -89,8 +79,7 @@ print(dname:lower())
 if dname:within('\3com') then print('child of com.') end
 ```
 
-RDATA
------
+## RDATA
 
 RDATA is stored as a simple binary string, the library contains a few helper functions for conversion from text format (the same as is used in RFC1035 zone files). A, AAAA, MX, NS, SOA, TXT have convenience functions:
 
@@ -117,10 +106,36 @@ kdns.rdata.parse('SRV 0 5 5060 sipserver.example.com.')
 assert(kdns.rdata.parse('SRV 0 5 zzzz') == nil)
 ```
 
-RDATA wire format loses information about its type during transformation, it needs to be first inserted to RR set for wire to text conversion, read next paragraph.
+RDATA wire format loses information about its type during transformation, it needs to be first inserted to RR set for wire to text conversion, read on how to print it.
 
-RR sets
--------
+
+### RDATA dissectors
+
+There are several dissectors available for RDATA.
+
+* SOA RDATA dissectors
+
+```lua
+local rata = kdns.rdata.parse('SOA a.ns. nobody. 2016000000 1800 900 604800 86400')
+print(kdns.rdata.soa_primary_ns(rdata)) -- 'a.ns.'
+print(kdns.rdata.soa_mailbox(rdata))    -- 'nobody.'
+print(kdns.rdata.serial(rdata))         -- 2016000000
+```
+
+Adding new dissectors is easy thanks to duck-typing in Lua.
+
+```lua
+-- Install new dissector
+kdns.rdata.cname_target = function (rdata)
+	rdata = ffi.cast('char *', rdata)
+	return kdns.dname(rdata, utils.dnamelenraw(rdata))
+end
+-- Dissect CNAME target
+local rdata = kdns.rdata.parse('CNAME next-name.')
+print(kdns.rdata.cname_target(rdata))   -- 'next-name.'
+```
+
+## RR sets
 
 RR set is a set of RDATA with a common `owner`, `type`, `class`. As there is no special type for a single RR, it can be expressed as a RR set of size 1. RR set can be constructed programatically, or parsed from wire.
 
@@ -163,8 +178,7 @@ com.                	3600	NS	ns1.com.
 com.                	3600	NS	ns2.com.
 ```
 
-DNS messages
-------------
+## DNS messages
 
 DNS messages are defined in [RFC 1035, section 4. MESSAGES](http://tools.ietf.org/html/rfc1035). They contain 12 octets of header, question and a sequence of RR. As with dnames, RDATA and RR sets, it is backed by binary string of fixed length.
 
@@ -213,8 +227,7 @@ pkt:begin(kdns.section.ANSWER) -- WRONG, throws error
 local wire = pkt:towire()
 ```
 
-EDNS
-----
+### EDNS
 
 The EDNS OPT is a special type of RR, because it uses its fields for a different purpose. The library treats it as a RR with only minimal hand-holding, but provides a handful of convenience functions. It also **MUST** be the last RR in the ADDITIONAL section (with the exception of TSIG). This is where you can set maximum UDP payload and `DO` bit to signalize DNSSEC OK.
 
@@ -259,8 +272,7 @@ if pkt.opt then
 end
 ```
 
-TSIG
-----
+### TSIG
 
 TSIG is not a property of packet but a pairing of TSIG key with a signer state. It has two operations - *sign()*, and *verify()* and keeps digest state between requests. This means that if you verify a query and use the same TSIG for signing response, it will remember the query digest for signing.
 
@@ -280,8 +292,7 @@ assert(tsig_server:sign(answer))
 assert(tsig_client:verify(answer))
 ```
 
-Caveats
--------
+### Caveats
 
 There is a caveat with packet parsing, as LuaJIT [doesn't GC cdata](http://luajit.org/ext_ffi_semantics.html#gc), the Lua string with a wire must be referenced during the lifetime of the packet.
 
@@ -304,38 +315,7 @@ Library also provides hexdump of binary string for debugging purposes or bisecti
 00000030  00 01 00 01 00 00 0E 10 00 04 01 02 03 04        ..............
 ```
 
-I/O
----
-
-There are convenience functions using [LuaSocket](http://w3.impa.br/~diego/software/luasocket/) for simple DNS server or clients. Use faster FFI bindings for high-performance applications.
-
-```lua
--- This is how you write a simple ISC dig clone
-local host = '2001:503:ba3e::2:30'
-local query = kdns.packet(512)
-query:question(kdns.dname.parse('com'), kdns.type['NS'])
--- Perform I/O and parse answer
-local wire = kdns.io.query(query:towire(), host)
-local answer = kdns.packet(#wire, wire)
-if not answer then error('no answer') end
-if not answer:parse() then error('invalid message') end
-print(answer)
-print('\n;; MSG SIZE  rcvd:', #wire)
-```
-
-The `kdns.io` supports only `send`, `recv` and `query` over UDP or TCP.
-
-```lua
--- Get connected socket to peer (TCP)
-local tcp_sock = kdns.io.client('127.0.0.1', true)
--- Send message
-kdns.io.send(query:towire(), tcp_sock)
--- Receive answer
-local answer = kdns.io.recv(tcp_sock)
-```
-
-Zone files
-----------
+## Zone files
 
 The library comes with a RFC1035 zone file parser with a very simple API.
 If you want to build something resembling a sorted record set or filter it, skip to the next section.
@@ -377,8 +357,7 @@ else
 end
 ```
 
-Zone sifting
-------------
+## Zone sifting
 
 Sift is a higher-level interface over zone parser that allows you to either filter the results
 using your own or predefined filters, and capture the results. This can be used to build a sorted
@@ -417,8 +396,7 @@ local searcher = set:searcher()
 local rr = searcher(qname)
 ```
 
-Filter algebra
-==============
+### Filter algebra
 
 The second part of sifting is filtering functionality. This is where LuaJIT shines,
 as it can compile the filter into efficient machine code on runtime.
@@ -468,20 +446,18 @@ example.            	3600	NS	a.ns.query.is.
 example.            	3600	NS	query.is.
 ```
 
-But not theses:
+But not these:
 
 ```
 example.            	3600	NS	query.is.bad.
 ```
 
-This is because the `NS(query.is)` searches for pattern `\5query\2is\0` because a domain name must be
-root-label terminated. This is useful because it can be used to find targets matching name, and all it's
-children.
+This is because an expression `NS(query.is)` searches for a domain name `\5query\2is\0` that is terminated by root label, that occurs only on the domain name end. This is useful to know, because it can be used to find matching subdomains.
 
 If you want to search for pattern in RDATA in wire format, do not prefix it with the type for interpretation.
 For example:
 
-```
+```lua
 rdata=\x02cz        -- Match all RDATA containing "\2cz" in wire format
 rdata~=\x01\x02\x03 -- Match all RDATA *not* containing a sequence of bytes
 ```
@@ -492,8 +468,8 @@ A real world example would be to find all domains, that are hosted at `hoster.is
 sift.zone(zone, sift.printer(), sift.makefilter('NS(hoster.is)'))
 ```
 
-Performance
-===========
+### Performance
+
 
 LuaJIT 2.1+ is recommended for performance reasons. To get a rough idea about the performance on your
 zone, use the `examples/bench.lua` script. Here's an example on a synthetic zone with 1 million records:
@@ -508,9 +484,162 @@ search: 923914 ops/sec
 This means it parsed and loaded a zone with million records into memory under 2 seconds, and is able to perform
 nearly 1M lookups per second on my laptop.
 
+## Asynchronous I/O
+
+The library comes with easy asynchronous socket I/O and scoped coroutines, this means you can write sequential code and get free concurrency when coroutine would block instead. As the coroutines are
+scoped, you can nest coroutines and tie their lifetime to sockets they block on.
+
+The asynchronous I/O is based on [ljsyscall][ljsyscall] and uses `epoll/kqueue` when possible. It also supports [TCP Fast Open][tcp-fastopen] and `SO_REUSEPORT` when available.
+
+You can create coroutines, very much like in Go language.
+
+```lua
+local go = kdns.aio
+go(function ()
+	print('Hi from Alice!')
+end)
+go(function ()
+	print('Hi from Bob!')
+end)
+assert(go.run())
+```
+
+You don't have to let coroutines take over main program loop and instead use a poll style API.
+
+```lua
+go(function ()
+	print('Hi from Bob!')
+end)
+assert(go.step(1)) -- Only one step with 1s timeout
+```
+
+### TCP example
+
+When inside coroutines, you can use `kdns.aio` functions instead of socket meta methods.
+Let's make a listener and a client and make them exchange messages.
+
+```lua
+local go = kdns.aio
+local addr = go.addr('127.0.0.1', 0) -- Make address object
+local master = go.socket(addr, true) -- Make bound socket
+assert(go(function ()                -- First coroutine acts as server
+	local bob = go.accept(master)    -- Accept TCP connection
+	go.tcpsend(bob, 'PING')          -- Send query
+	local msg, err = go.tcprecv(bob) -- Receive response
+	assert(msg == 'PONG')
+end))
+
+assert(go(function ()
+	local alice = go.socket('inet', true)   -- Make unbound TCP socket
+	go.connect(alice, master:getsockname()) -- Connect to TCP server
+	local msg, err = go.tcprecv(alice)      -- Wait for query
+	assert(msg == 'PING')
+	go.tcpsend(alice, 'PONG')               -- Send back response
+end))
+
+assert(go.run(1))
+```
+
+### Using TCP Fast Open
+
+For bound sockets it is enabled automatically. If you want to initiate a TFO connection,
+pass a message and address to `connect()` call in addition address. If possible,
+the library will start TFO or fall back to `connect + send` transparently.
+
+```lua
+go(function()
+	local client = go.socket('inet', true) -- Make unbound TCP socket
+	go.connect(client, addr, 'PING', 4)    -- Attempt TFO or connect + send
+	local msg, err = go.recv(client)       -- Receive response (client is connected)
+	print('Received:', msg)
+end)
+```
+
+### UDP example
+
+Both connected and unconnected UDP sockets are supported. Connected sockets are used in the same way
+as TCP sockets in a way that address doesn't have to be provided. Make sure to use `udp{recv|send}()` function counterparts, as in DNS/TCP messages are prefixed with their length, but not in DNS/UDP.
+
+```lua
+go(function()
+	-- Make connected UDP socket
+	local client = go.socket('inet')            
+	go.connect(client, go.addr('193.0.14.129'))
+	-- Make root NS question
+	local msg = kdns.packet(64)
+	msg:question('\0', kdns.type.NS)
+	-- Send DNS message and receive response
+	go.udpsend(client, msg:towire())
+	local msg = assert(go.udprecv(client))
+	print('received', kdns.hexdump(msg))
+end)
+```
+
+For unconnected sockets, you have to provide valid address to `udpsend()` to make it work.
+
+```lua
+go(function()
+	-- Make unconnected UDP socket
+	local addr = go.addr('193.0.14.129')
+	local client = go.socket('inet')
+	-- Make root NS question
+	local msg = kdns.packet(64)
+	msg:question('\0', kdns.type.NS)     
+	-- Send DNS message and receive response
+	go.udpsend(client, msg:towire(), nil, addr)
+	local msg, sa = go.udprecv(client)
+	print('received from', sa.addr, sa.port, kdns.hexdump(msg))
+end)
+```
+
+### Composing UDP servers
+
+The coroutines provide you with an easy concurrency for UDP sockets without callbacks,
+allowing for push-pull, circular queue and single-listener modes.
+
+```lua
+local udp = go.socket(go.addr('127.0.0.1')) -- Make UDP server socket
+-- Writer
+local function serve(sock, msg, saddr)
+	-- Parse and flip QR=1
+	local pkt = kdns.packet(#msg, msg)
+	assert(pkt:parse())
+	pkt:qr(true)
+	-- Send the packet back
+	go.udpsend(udp, msg.wire, msg.size, saddr)
+end
+-- Reader
+assert(go(function ()
+	while true do
+		local msg, addr = go.udprecv(udp)
+		local ok, err = pcall(serve, msg, addr)
+		if not ok then print(err) end
+	end
+end))
+```
+
+### Gotchas
+
+Performance PRO TIP is to avoid creating closures in loops, as that aborts traces. Instead, create the closure beforehand and reuse it in loop with an arbitrary number of parameters.
+
+```lua
+-- Create a function elsewhere
+local function serve(sock, msg)
+	print('received', sock:getfd(), #msg)
+end
+-- Now in the tight loop...
+while true do
+	assert(go(serve, sock, go.recv(sock)))
+end
+```
+
+Also, a single socket may have only 1 reader and 1 writer at the same time. Use socket dup'ing to avoid multiple coroutines blocking on the same socket. 
+
 [LuaJIT FFI]: http://luajit.org/ext_ffi.html
 [LuaJIT]: http://luajit.org
 [libknot]: https://github.com/CZ-NIC/knot/tree/master/src/libknot
 [zscanner]: https://github.com/CZ-NIC/knot/tree/master/src/zscanner
 [zscanner-api]: https://github.com/CZ-NIC/knot/blob/master/src/zscanner/scanner.h#L86
 [knot-readme]: https://github.com/CZ-NIC/knot/blob/master/README
+[ljsyscall]: http://myriabit.com/ljsyscall/
+[tcp-fastopen]: https://tools.ietf.org/html/draft-ietf-tcpm-fastopen-10

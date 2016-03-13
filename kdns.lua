@@ -1,17 +1,11 @@
--- LuaJIT ffi bindings for libkres, a DNS resolver library.
--- @note Since it's statically compiled, it expects to find the symbols in the C namespace.
+-- A contemporary LuaJIT DNS library using FFI.
 
 local ffi = require('ffi')
 local bit = require('bit')
 local math = require('math')
-local random = math.random
-local bor, band, bnot = bit.bor, bit.band, bit.bnot
-local C = ffi.C
 local utils = require('kdns.utils')
-local n16, n32 = utils.n16, utils.n32
 local knot = ffi.load(utils.dll_versioned('libknot', '2'))
 ffi.cdef[[
-
 /*
  * Record types and classes.
  */
@@ -121,15 +115,13 @@ typedef int knot_section_t; /* Do not touch */
 typedef void knot_rrinfo_t; /* Do not touch */
 typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
 typedef uint8_t knot_rdata_t;
-typedef struct knot_rdataset {
-	uint16_t count;
-	knot_rdata_t *data;
-} knot_rdataset_t;
 typedef struct knot_rrset {
-	knot_dname_t *_owner; /* This is private because GC-unaware */
-	uint16_t _type;
-	uint16_t _class;
-	knot_rdataset_t rr;
+	knot_dname_t *raw_owner; /* This is private because GC-unaware */
+	uint16_t raw_type;
+	uint16_t raw_class;
+	uint32_t __pad__;        /* Padding because libknot uses nested structure */
+	uint16_t rdcount;
+	knot_rdata_t *raw_data;
 } knot_rrset_t;
 typedef struct {
 	struct knot_pkt *pkt;
@@ -174,6 +166,7 @@ typedef struct {
 	uint8_t digest[64]; /* Max size of the HMAC-SHA512 */
 } tsig_t;
 /* libc */
+void *malloc(size_t len);
 void free(void *ptr);
 int memcmp(const void *a, const void *b, size_t len);
 /* descriptors */
@@ -185,21 +178,16 @@ char *knot_dname_to_str(char *dst, const uint8_t *name, size_t maxlen);
 int knot_dname_to_lower(uint8_t *name);
 int knot_dname_labels(const uint8_t *name, const uint8_t *pkt);
 bool knot_dname_in(const uint8_t *domain, const uint8_t *sub);
-knot_dname_t *knot_dname_copy(const uint8_t *name, void /* mm_ctx_t */ *mm);
+knot_dname_t *knot_dname_copy(const void *name, void /* mm_ctx_t */ *mm);
 int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uint8_t *pkt);
 /* resource records */
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
 uint8_t *knot_rdata_data(const knot_rdata_t *rr);
-knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
-knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
-void knot_rdataset_clear(knot_rdataset_t *rrs, void /* mm_ctx_t */ *mm);
-int knot_rdataset_copy(knot_rdataset_t *dst, const knot_rdataset_t *src, void /* mm_ctx_t */ *mm);
+uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
-uint32_t knot_rrset_ttl(const knot_rrset_t *rrset);
 int knot_rrset_txt_dump(const knot_rrset_t *rrset, char *dst, size_t maxlen, const knot_dump_style_t *style);
 int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);
-void knot_rrset_clear(knot_rrset_t *rrset, void /* mm_ctx_t */ *mm);
 /* opt rr */
 uint8_t knot_edns_get_version(const knot_rrset_t *opt_rr);
 void knot_edns_set_version(knot_rrset_t *opt_rr, uint8_t version);
@@ -243,11 +231,7 @@ uint64_t knot_tsig_rdata_time_signed(const knot_rrset_t *tsig);
 local void_p = ffi.typeof('void *')
 local u8_p = ffi.typeof('uint8_t *')
 local u16_p = ffi.typeof('uint16_t *')
-local int_t = ffi.typeof('int')
-local intptr_t = ffi.typeof('intptr_t')
-local i8_vla = ffi.typeof('char [?]')
-local u8_vla = ffi.typeof('uint8_t [?]')
-local size_vla = ffi.typeof('size_t [?]')
+local u32_p = ffi.typeof('uint32_t *')
 
 -- Constants
 local const_class = ffi.new('struct rr_class')
@@ -258,16 +242,15 @@ local const_rcode = ffi.new('struct pkt_rcode')
 local const_rcode_tsig = ffi.new('struct tsig_rcode')
 
 -- Meta tables for catchall
-local meta_nokey = { __index = function (t, k) return nil end }
-ffi.metatype('struct rr_class', meta_nokey)
-ffi.metatype('struct rr_type', meta_nokey)
+ffi.metatype('struct rr_class', { __index = function (t, k) return nil end })
+ffi.metatype('struct rr_type', { __index = function (t, k) return nil end })
 
 -- Constant tables
 local const_class_str = {
 	[1] = 'IN', [3] = 'CH', [254] = 'NONE', [255] = 'ANY'
 }
 local function const_type_convert(rtype)
-	local str = ffi.new(i8_vla, 16)
+	local str = ffi.new('char [?]', 16)
 	knot.knot_rrtype_to_string(rtype, str, 16)
 	return ffi.string(str)
 end
@@ -298,12 +281,11 @@ local const_errcode_tsig = {
 }
 
 -- Metatype for domain name
-local dnamecmp, dnamelen = utils.dnamecmp, utils.dnamelen
-local dname_buf = ffi.new(i8_vla, 256)
+local dname_buf = ffi.new('char [?]', 256)
 local knot_dname_t = ffi.typeof('knot_dname_t')
 ffi.metatype( knot_dname_t, {
 	__new = function (ct, name, len)
-		assert(name)
+		assert(name ~= nil)
 		len = len or #name
 		local dname = ffi.new(ct, len + 1)
 		-- Check input wire format, malformed names must not be passed through this point
@@ -324,6 +306,7 @@ ffi.metatype( knot_dname_t, {
 	__index = {
 		copy = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
 			return knot_dname_t(dname.bytes, #dname)
 		end,
 		equals = function(a, b)
@@ -332,12 +315,11 @@ ffi.metatype( knot_dname_t, {
 			-- for dname wire check, this is slower than comparing casted values
 			if type(b) == 'string' then b = knot_dname_t(b) end
 			local l1, l2 = a:len(), b:len()
-			return l1 == l2 and C.memcmp(a.bytes, b.bytes, l1)
+			return l1 == l2 and ffi.C.memcmp(a.bytes, b.bytes, l1)
 		end,
-		compare = function(a, b)			
-			if b == nil then return false end
+		compare = function(a, b)
 			assert(ffi.istype(knot_dname_t, a))
-			return dnamecmp(a, b)
+			return utils.dnamecmp(a, b)
 		end,
 		parse = function(name)
 			local dname = knot.knot_dname_from_str(dname_buf, name, 255)
@@ -351,10 +333,12 @@ ffi.metatype( knot_dname_t, {
 		end,
 		len = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			return (dnamelen(dname))
+			assert(dname.bytes ~= nil)
+			return utils.dnamelen(dname)
 		end,
 		labels = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
 			return knot.knot_dname_labels(dname.bytes, nil)
 		end,
 		within = function(dname, parent)
@@ -363,10 +347,12 @@ ffi.metatype( knot_dname_t, {
 			return knot.knot_dname_in(ffi.cast(u8_p, parent), dname.bytes)
 		end,
 		parentof = function(dname, child)
+			assert(ffi.istype(knot_dname_t, child))
 			return child:within(dname)
 		end,
 		tostring = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
 			return ffi.string(knot.knot_dname_to_str(dname_buf, dname.bytes, 255))
 		end
 	},
@@ -391,19 +377,39 @@ local rdata = {
 	soa = function (rdata_str) return rd_parse('SOA '..rdata_str) end,
 	ns = function (rdata_str) return rd_parse('NS '..rdata_str) end,
 	txt = function (rdata_str) return rd_parse('TXT '..rdata_str) end,
+	-- RDATA disection routines (extensible)
+	soa_primary_ns = function(rdata)
+		rdata = ffi.cast(u8_p, rdata)
+		return knot_dname_t(rdata, utils.dnamelenraw(rdata))
+	end,
+	soa_mailbox = function(rdata)
+		rdata = ffi.cast(u8_p, rdata)
+		rdata = rdata + utils.dnamelenraw(rdata) -- Primary NS
+		return knot_dname_t(rdata, utils.dnamelenraw(rdata))
+	end,
+	soa_serial = function(rdata)
+		rdata = ffi.cast(u8_p, rdata)
+		rdata = rdata + utils.dnamelenraw(rdata) -- Primary NS
+		rdata = rdata + utils.dnamelenraw(rdata) -- Mailbox
+		return utils.n32(ffi.cast(u32_p, rdata)[0])
+	end,
 }
 
 -- Metatype for RR set
 local rrset_buflen = (64 + 1) * 1024
-local rrset_buf = ffi.new(i8_vla, rrset_buflen)
+local rrset_buf = ffi.new('char [?]', rrset_buflen)
 local knot_rrset_t = ffi.typeof('knot_rrset_t')
 ffi.metatype( knot_rrset_t, {
 	__gc = function (rr)
-		knot.knot_rrset_clear(rr, nil)
+		if rr.raw_owner then ffi.C.free(rr.raw_owner) end
+		if rr.rdcount > 0 then ffi.C.free(rr.raw_data) end
 	end,
-	__new = function (ct, owner, type, class)
-		local rr = ffi.new(knot_rrset_t)
-		return rr:init(owner, type, class, true)
+	__new = function (ct, owner, rrtype, rrclass, ttl)
+		local rr = ffi.new(ct)
+		rr.raw_owner = owner and knot.knot_dname_copy(owner, nil)
+		rr.raw_type = rrtype
+		rr.raw_class = rrclass or const_class.IN
+		return rr
 	end,
 	__lt = function (a, b) return a:lt(a, b) end,
 	__tostring = function(rr)
@@ -413,35 +419,27 @@ ffi.metatype( knot_rrset_t, {
 		lt = function (a, b)
 			assert(ffi.istype(knot_rrset_t, a))
 			assert(ffi.istype(knot_rrset_t, b))
-			local ret = dnamecmp(a:owner(), b:owner())
-			if ret == 0 then ret = a._type - b._type end
+			local ret = utils.dnamecmp(a:owner(), b:owner())
+			if ret == 0 then ret = a:type() - b:type() end
 			return ret < 0
 		end,
-		owner = function(rr)
-			-- Must check to convert NULL cdata to nil
-			assert(ffi.istype(knot_rrset_t, rr))
-			if rr._owner == nil then return nil end
-			return rr._owner[0]
-		end,
-		type = function(rr) return rr._type end,
-		class = function(rr) return rr._class end,
+		owner = function(rr) return rr.raw_owner[0] end,
+		type = function(rr) return rr.raw_type end,
+		class = function(rr) return rr.raw_class end,
 		ttl = function(rr, ttl)
 			assert(ffi.istype(knot_rrset_t, rr))
-			if rr.rr.count > 0 then
-				if ttl ~= nil then
-					local rd = knot.knot_rdataset_at(rr.rr, 0)
-					knot.knot_rdata_set_ttl(rd, ttl)
-				end
-				return tonumber(knot.knot_rrset_ttl(rr))
+			if rr.rdcount > 0 then
+				if ttl ~= nil then knot.knot_rdata_set_ttl(rr.raw_data, ttl) end
+				return tonumber(knot.knot_rdata_ttl(rr.raw_data))
 			else return 0 end
 		end,
 		rdata = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
-			local rdata = knot.knot_rdataset_at(rr.rr, i)
+			local rdata = utils.rdsetget(rr, i)
 			return ffi.string(knot.knot_rdata_data(rdata), knot.knot_rdata_rdlen(rdata))
 		end,
 		count = function (rr)
-			return tonumber(rr.rr.count)
+			return tonumber(rr.rdcount)
 		end,
 		get = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
@@ -451,15 +449,19 @@ ffi.metatype( knot_rrset_t, {
 			        type = tonumber(rr:type()),
 			        rdata = rr:rdata(i)}
 		end,
-		init = function (rr, owner, type, class, noinit)
+		init = function (rr, owner, rrtype, rrclass)
 			assert(ffi.istype(knot_rrset_t, rr))
-			if not noinit then knot.knot_rrset_clear(rr, nil) end
-			ffi.fill(rr.rr, ffi.sizeof(rr.rr))
-			rr._type = type
-			rr._class = class or const_class.IN
+			rr.raw_type = rrtype
+			rr.raw_class = rrclass or const_class.IN
 			-- @note RR set structure is managed by LuaJIT allocator, the owner and contents is
 			--       managed on the C side as GC is unaware of assignments in struct fields
-			if owner then rr._owner = knot.knot_dname_copy(ffi.cast(void_p, owner), nil) end
+			if owner ~= nil then
+				rr.raw_owner = knot.knot_dname_copy(owner, nil)
+			else
+				rr.raw_owner = nil
+			end
+			rr.rdcount = 0
+			rr.raw_data = nil
 			return rr
 		end,
 		add = function(rr, rdata, ttl, rdlen)
@@ -470,22 +472,35 @@ ffi.metatype( knot_rrset_t, {
 		end,
 		copy = function (rr)
 			assert(ffi.istype(knot_rrset_t, rr))
-			local copy = knot_rrset_t(rr._owner, rr._type, rr._class)
-			return knot.knot_rdataset_copy(copy.rr, rr.rr, nil) == 0 and copy
+			local copy = knot_rrset_t(rr:owner(), rr:type(), rr:class())
+			if rr.rdcount > 0 then
+				copy.rdcount = rr.rdcount
+				local rdlen = utils.rdsetlen(rr)
+				copy.raw_data = ffi.C.malloc(rdlen)
+				assert(copy.raw_data ~= nil)
+				ffi.copy(copy.raw_data, rr.raw_data, rdlen)
+			end
+			return copy
 		end,
 		clear = function (rr)
 			assert(ffi.istype(knot_rrset_t, rr))
-			knot.knot_rdataset_clear(rr.rr, nil)
+			if rr.rdcount > 0 then
+				ffi.C.free(rr.raw_data)
+				rr.rdcount = 0
+				rr.raw_data = nil
+			end
 		end,
 		tostring = function(rr, buf)
 			assert(ffi.istype(knot_rrset_t, rr))
-			if rr.rr.count > 0 then
+			if rr.raw_owner == nil then return end
+			if rr:count() > 0 then
 				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				return ret >= 0 and ffi.string(rrset_buf)
 			else
 				return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
 			end
 		end,
+		__index = function(t,k,v) print (t,k,v) assert(false) end,
 	}
 })
 
@@ -495,16 +510,16 @@ local function edns_version(rr, val)
 	return knot.knot_edns_get_version(rr)
 end
 local function edns_payload(rr, val)
-	if val ~= nil then rr._class = val end
+	if val ~= nil then rr.raw_class = val end
 	return rr:class()
 end
 local function edns_do(rr, val)
 	local ttl = rr:ttl()
 	if val ~= nil then
-		ttl = bor(ttl, val and 0x8000 or 0x00)
+		ttl = bit.bor(ttl, val and 0x8000 or 0x00)
 		rr:ttl(ttl)
 	end
-	return band(ttl, 0x8000) ~= 0
+	return bit.band(ttl, 0x8000) ~= 0
 end
 local function edns_option(rr, code, val)
 	if val ~= nil then knot.knot_edns_add_option(rr, code, #val, val, nil) end
@@ -521,19 +536,37 @@ local function edns_t(version, payload)
 	return rr
 end
 
+-- Metatype for packet section
+ffi.metatype(ffi.typeof('knot_pktsection_t'), {
+	__len = function (t) return t.count end,
+	__index = function (t, k)
+		assert(k < t.count)
+		return knot.knot_pkt_rr(t, k)
+	end,
+	__ipairs = function (t)
+		local i,n = 0, #t
+		return function()
+			i = i + 1
+			if i <= n then
+				return i-1, t[i-1]
+			end
+		end
+	end
+})
+
 -- Metatype for packet
 local knot_pkt_t = ffi.typeof('knot_pkt_t')
 local function pkt_cnt(pkt, off, val)
 	local ptr = ffi.cast(u16_p, pkt.wire + off)
-	if val ~= nil then ptr[0] = n16(val) end
-	return n16(ptr[0])
+	if val ~= nil then ptr[0] = utils.n16(val) end
+	return utils.n16(ptr[0])
 end
 local function pkt_flags(pkt, idx, off, val)
 	if val ~= nil then
-		if val then pkt.wire[idx] = bor(pkt.wire[idx], off)
-		else pkt.wire[idx] = band(pkt.wire[idx], bnot(off)) end
+		if val then pkt.wire[idx] = bit.bor(pkt.wire[idx], off)
+		else pkt.wire[idx] = bit.band(pkt.wire[idx], bit.bnot(off)) end
 	end
-	return band(pkt.wire[idx], off) ~= 0
+	return bit.band(pkt.wire[idx], off) ~= 0
 end
 local function section_tostring(pkt, sec_id, plain)
 	local data = {}
@@ -573,7 +606,7 @@ ffi.metatype( knot_pkt_t, {
 		local pkt = ffi.gc(knot.knot_pkt_new(nil, size, nil), pkt_free)
 		if pkt ~= nil then
 			if wire == nil then
-				pkt:id(random(0, 65535))
+				pkt:id(math.random(0, 65535))
 			else
 				assert(size <= #wire)
 				ffi.copy(pkt.wire, wire, size)
@@ -594,8 +627,8 @@ ffi.metatype( knot_pkt_t, {
 		id = function (pkt, val)
 			assert(pkt ~= nil)
 			local id_wire = ffi.cast(u16_p, pkt.wire)
-			if val ~= nil then id_wire[0] = n16(val) end
-			return n16(id_wire[0])
+			if val ~= nil then id_wire[0] = utils.n16(val) end
+			return utils.n16(id_wire[0])
 		end,
 		qdcount = function(pkt, val) return pkt_cnt(pkt, 4,  val) end,
 		ancount = function(pkt, val) return pkt_cnt(pkt, 6,  val) end,
@@ -603,13 +636,13 @@ ffi.metatype( knot_pkt_t, {
 		arcount = function(pkt, val) return pkt_cnt(pkt, 10, val) end,
 		opcode = function (pkt, val)
 			assert(pkt ~= nil)
-			pkt.wire[2] = (val) and bor(band(pkt.wire[2], 0x78), 8 * val) or pkt.wire[2]
-			return band(pkt.wire[2], 0x78) / 8
+			pkt.wire[2] = (val) and bit.bor(bit.band(pkt.wire[2], 0x78), 8 * val) or pkt.wire[2]
+			return bit.band(pkt.wire[2], 0x78) / 8
 		end,
 		rcode = function (pkt, val)
 			assert(pkt ~= nil)
-			pkt.wire[3] = (val) and bor(band(pkt.wire[3], 0xf0), val) or pkt.wire[3]
-			return band(pkt.wire[3], 0x0f)
+			pkt.wire[3] = (val) and bit.bor(bit.band(pkt.wire[3], 0xf0), val) or pkt.wire[3]
+			return bit.band(pkt.wire[3], 0x0f)
 		end,
 		rd = function (pkt, val) return pkt_flags(pkt, 2, 0x01, val) end,
 		tc = function (pkt, val) return pkt_flags(pkt, 2, 0x02, val) end,
@@ -635,29 +668,16 @@ ffi.metatype( knot_pkt_t, {
 		end,
 		section = function (pkt, section_id)
 			if pkt == nil then return nil end
-			if section_id == nil then
-				-- Old version of libknot didn't have 'tsig_wire' struct
-				-- check if it overlaps with pkt._current, in this case
-				-- the pointer would be <= 2 and the len ~= 0
-				local cur = ffi.cast(int_t, pkt._tsig_wire.pos)
-				if cur <= 2 and pkt._tsig_wire.len ~= 0 then return cur
-				else return pkt._current end
-			end
-			local records = {}
-			local section = knot.knot_pkt_section(pkt, section_id)
-			for i = 0, section.count - 1 do
-				local rrset = knot.knot_pkt_rr(section, i)
-				for k = 0, rrset.rr.count - 1 do
-					table.insert(records, rrset:get(k))
-				end
-			end
-			return records
+			if section_id == nil then return pkt._current end
+			return knot.knot_pkt_section(pkt, section_id)[0]
 		end,
 		put = function (pkt, rrset, noref)
 			-- Insertion loses track of rrset reference, reference it explicitly
-			if pkt == nil or rrset == nil then return false end
-			if noref ~= true then pkt_ref(pkt, rrset) end
-			if rrset:type() == const_type.OPT then pkt.opt = rrset end
+			if pkt == nil or rrset == nil or rrset:owner() == nil then return false end
+			if noref ~= true then
+				pkt_ref(pkt, rrset)
+				if rrset:type() == const_type.OPT then pkt.opt = rrset end
+			end
 			local ret = knot.knot_pkt_put(pkt, 0, rrset, 0)
 			if ret == 0 then
 				pkt.parsed = pkt.size
@@ -677,7 +697,7 @@ ffi.metatype( knot_pkt_t, {
 				pkt.size = keep_size
 				if pkt.tsig ~= nil then pkt:arcount(pkt:arcount() + 1) end
 				return true
-			else print(ret) return false end
+			else return false, ret end
 		end,
 		begin = function (pkt, section)
 			assert(pkt)
@@ -772,7 +792,7 @@ ffi.metatype( tsig_t, {
 			if pkt.tsig ~= nil then pkt:arcount(pkt:arcount() - 1) end
 			pkt.tsig = nil
 			-- Sign the query/response including previous digest
-			local newlen = ffi.new(size_vla, 2, {0, pkt.parsed})
+			local newlen = ffi.new('size_t [?]', 2, {0, pkt.parsed})
 			local ret = knot.knot_tsig_sign(pkt.wire, newlen + 1, pkt.max_size, tsig.digest, tsig.digest_len,
 			                                tsig.digest, newlen, tsig.key, rcode, tsig.last_signed)
 			if ret ~= 0 then return false end
@@ -816,7 +836,7 @@ ffi.metatype( tsig_t, {
 })
 
 -- Module API
-local kdns = {
+local M = {
 	-- Constants
 	class = const_class,
 	type = const_type,
@@ -850,8 +870,8 @@ local kdns = {
 	torrset = function (udata) return ffi.cast('knot_rrset_t *', udata) end,
 	topacket = function (udata) return ffi.cast('knot_pkt_t *', udata) end,
 	-- Utils
-	hexdump = require('kdns.utils').hexdump,
-	io = require('kdns.io'),
+	hexdump = utils.hexdump,
+	utils = utils,
 }
 
-return kdns
+return M

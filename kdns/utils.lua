@@ -26,8 +26,10 @@ function utils.hexdump(buf)
 end
 
 -- FFI + C code
+local libknot = ffi.load(utils.dll_versioned('libknot', '2'))
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
+unsigned mtime(const char *path);
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
 ]]
 
@@ -40,15 +42,38 @@ if ffi.abi('le') then
 end
 utils.n32 = n32
 utils.n16 = n16
-local rshift,bxor,arshift,band = bit.rshift,bit.bxor,bit.arshift,bit.band
+local rshift,band = bit.rshift,bit.band
+
+-- Compute RDATA set length
+local function rdsetlen(rr)
+	local len = 0
+	for i = 1,rr.rdcount do
+		len = len + (libknot.knot_rdata_rdlen(rr.raw_data + len) + 4)
+	end
+	return len
+end
+
+-- Get RDATA set member
+local function rdsetget(rr, n)
+	assert(n < rr.rdcount)
+	local p = rr.raw_data
+	for i = 1,n do
+		p = p + (libknot.knot_rdata_rdlen(p) + 4)
+	end
+	return p
+end
 
 -- Domain name wire length
-local function dnamelen(dname)
-	local p, i = dname.bytes, 0
+local function dnamelenraw(dname)
+	local p, i = dname, 0
+	assert(p ~= nil)
 	while p[i] ~= 0 do
 		i = i + p[i] + 1
 	end
 	return i + 1 -- Add label count
+end
+local function dnamelen(dname)
+	return dnamelenraw(dname.bytes)
 end
 
 -- Canonically compare domain wire name / keys
@@ -56,13 +81,16 @@ local function dnamecmp(lhs, rhs)
 	return cutil.dnamecmp(lhs.bytes, rhs.bytes)
 end
 
--- Export dname comparators
+-- Export low level accessors
+utils.rdsetlen = rdsetlen
+utils.rdsetget = rdsetget
 utils.dnamelen = dnamelen
+utils.dnamelenraw = dnamelenraw
 utils.dnamecmp = dnamecmp
+utils.dnamecmpraw = cutil.dnamecmp
+utils.mtime = cutil.mtime
 
--- Sort FFI array (0-indexed) using bottom-up heapsort adapted from GSL-shell [1]
--- * Copyright (C) 2009-2012 Francesco Abbate
--- * Published under GNU GENERAL PUBLIC LICENSE, version 3
+-- Sort FFI array (0-indexed) using bottom-up heapsort based on GSL-shell [1]
 -- Selection-based sorts work better for this workload, as swaps are more expensive
 -- [1]: https://github.com/franko/gsl-shell
 function utils.sort(array, len)
@@ -76,7 +104,6 @@ function utils.sort(array, len)
 		-- Trace a path of maximum children (leaf search)
 		while lshift(j + 1, 1) < len do
 			j = lshift(j + 1, 1)
-			-- j = j - tonumber(ffi.cast('int32_t', array[j]:lt(array[(j - 1)])))
 			if array[j]:lt(array[j - 1]) then j = j - 1 end
 			ffi.copy(array + hole, array + j, elmsize)
 			hole = j
@@ -109,7 +136,6 @@ function utils.sort(array, len)
 	end
 end
 
--- Binary search
 local function bsearch(array, len, owner, steps)
 	-- Number of steps is specialized, this allows unrolling
 	if not steps then steps = math.log(len, 2) end
@@ -124,7 +150,7 @@ local function bsearch(array, len, owner, steps)
 	return array[low]
 end
 
--- Binary search closure
+-- Binary search closure specialized for given array size
 local function bsearcher(array, len)
 	-- Number of steps can be precomputed
 	local steps = math.log(len, 2)
@@ -165,6 +191,12 @@ function utils.buffer_grow(arr)
 	arr.at = narr
 	arr.cap = nlen
 	return true
+end
+
+-- Export basic OS operations
+local _, S = pcall(require, 'syscall')
+if S then
+	utils.chdir = S.chdir
 end
 
 return utils

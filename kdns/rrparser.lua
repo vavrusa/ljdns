@@ -163,7 +163,7 @@ ffi.metatype(sortedset_t, {
 local const_char_t = ffi.typeof('const char *')
 local zs_scanner_t = ffi.typeof('struct scanner')
 ffi.metatype( zs_scanner_t, {
-	__gc = function(zs) return libzscanner.zs_deinit(zs) end,
+	__gc = function(zs) libzscanner.zs_deinit(zs) end,
 	__new = function(ct, origin, class, ttl)
 		if not class then class = 1 end
 		if not ttl then ttl = 3600 end
@@ -177,6 +177,10 @@ ffi.metatype( zs_scanner_t, {
 			local ret = libzscanner.zs_set_input_file(zs, file)
 			if ret ~= 0 then return false, zs:strerr() end
 			return true
+		end,
+		reset = function(zs)
+			assert(ffi.istype(zs, zs_scanner_t))
+			libzscanner.zs_set_input_string(zs, '', 0)
 		end,
 		parse = function(zs, input)
 			assert(ffi.istype(zs, zs_scanner_t))

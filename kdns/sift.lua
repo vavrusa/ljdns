@@ -90,6 +90,7 @@ local function sink_print()
 		if not owner then return count end
 		io.write(kdns.rrset(owner, rtype):add(rdata, ttl):tostring())
 		count = count + 1
+		return true
 	end
 end
 
@@ -98,6 +99,7 @@ local function sink_table()
 	return function (owner, type, ttl, rdata)
 		if not owner then return capture end
 		table.insert(capture, kdns.rrset(owner, type):add(rdata, ttl))
+		return true
 	end
 end
 
@@ -105,8 +107,12 @@ local function sink_set()
 	local capture = rrparser.set()
 	return function (owner, type, ttl, rdata)
 		if not owner then return capture end
+		-- We'll initialize pre-allocated block to save some ticks
 		local rrset = capture:newrr(true)
-		rrset:init(owner, type, nil, true):add(rdata, ttl)
+		rrset.raw_owner = nil
+		rrset.raw_data = nil
+		rrset:init(owner, type):add(rdata, ttl)
+		return true
 	end
 end
 
@@ -117,23 +123,30 @@ local function sink_json()
 			for i,v in ipairs(capture) do
 				local owner, ttl, type, rdata = v:match("(%S+)%s+(%d+)%s+(%S+)%s+([^\n]+)\n")
 				capture[i] = string.format('{ "owner": "%s", "type": "%s", "ttl": %d, "rdata": "%s" }',
-					owner, type, ttl, rdata)
+					owner:gsub('\\','\\\\'), type, ttl, rdata)
 			end
 			return string.format('[%s]', table.concat(capture, ','))
 		end
 		table.insert(capture, kdns.rrset(owner, type):add(rdata, ttl):tostring())
+		return true
 	end
 end
 
 local function zone(zone, sink, filter)
+	if not zone then return false end
 	if not sink then sink = sink_print() end
 	local parser = assert(rrparser.new())
-	assert(parser:open(zone))
+	local ok, err = parser:open(zone)
+	if not ok then
+		return ok, err
+	end
 	while parser:parse() do
 		local owner_dname = kdns.todname(parser.r_owner)
 		local rdata = ffi.string(parser.r_data, parser.r_data_length)
 		if not filter or filter(owner_dname, parser.r_type, parser.r_ttl, rdata) then
-			sink(owner_dname, parser.r_type, parser.r_ttl, rdata)
+			if not sink(owner_dname, parser.r_type, parser.r_ttl, rdata) then
+				break
+			end
 		end
 	end
 	return sink(nil)

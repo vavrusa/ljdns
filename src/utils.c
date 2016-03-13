@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
@@ -38,4 +39,14 @@ int dnamecmp(const uint8_t *lhs, const uint8_t *rhs)
 		if (ret != 0) return ret;
 	}
 	return lp - rp;
+}
+
+/* Fetch file last modified time. */
+unsigned mtime(const char *path)
+{
+	struct stat s;
+	if (stat(path, &s) == 0) {
+		return s.st_mtime;
+	}
+	return 0;
 }

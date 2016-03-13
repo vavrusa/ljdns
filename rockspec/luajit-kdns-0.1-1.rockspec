@@ -12,7 +12,7 @@ description = {
 }
 dependencies = {
    "lua >= 5.1",
-   "luasocket >= 2.0.1",
+   "ljsyscall >= 0.11",
 }
 external_dependencies = {
     LIBZSCANNER = {

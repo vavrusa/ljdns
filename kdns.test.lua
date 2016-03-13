@@ -60,6 +60,10 @@ assert(kdns.dname.equals(rrset_copy:owner(), rrset:owner()))
 assert(rrset_copy:count() == rrset:count())
 rrset_copy = nil
 collectgarbage()
+local empty_rrset = kdns.rrset(nil, 0)
+assert(empty_rrset:owner().bytes == nil)
+empty_rrset = nil
+collectgarbage()
 print('[ OK ] kdns.rrset')
 
 -- Test OPT RR
@@ -214,4 +218,33 @@ for i = 1, #names - 1 do
 	assert(utils.dnamecmp(names[i], names[i + 1]) < 0)
 end
 print('[ OK ] kdns.utils.dnamecmp')
+-- Test asynchronous I/O
+local go = require('kdns.aio')
+local server = go.socket(go.addr('127.0.0.1', 0), true)
+local ffi = require('ffi')
+-- Function sends PING to client, expects PONG back
+local writes, reads = 0, 0
+assert(go(function ()
+	local client = go.accept(server)
+	local ret, err = go.tcprecv(client)
+	assert(ret == 'PING')
+	reads = reads + 1
+	ret, err = go.tcpsend(client, 'PONG')
+	writes = writes + 1
+end))
+assert(go(function ()
+	local client = go.socket('inet', true)
+	-- Attempt TFO
+	go.connect(client, server:getsockname(), 'PING')
+	local msg, err = go.tcprecv(client)
+	assert(msg == 'PONG')
+end))
+-- Execute both coroutines
+assert(go.coroutines == 2)
+assert(go.run(1))
+-- Evaluate results
+assert(writes == 1)
+assert(reads == 1)
+-- Must be finished by now
+assert(go.coroutines == 0)
 print('[ OK ] kdns')
