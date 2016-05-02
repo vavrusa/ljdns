@@ -721,7 +721,7 @@ ffi.metatype( knot_pkt_t, {
 			return ffi.string(pkt.wire, pkt.size)
 		end,
 		tostring = function(pkt, short)
-			if short == true then return section_tostring(pkt, const_section.ANSWER, true) end
+			if short then return section_tostring(pkt, const_section.ANSWER, true) end
 			local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
 				const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
 			local flags = {}

@@ -2,7 +2,7 @@
 local kdns = require('kdns')
 -- Parse parameters
 local host, port, tcp, xfer, key = nil, 53, false, false, nil
-local version, dobit, bufsize, short = 0, false, nil, false
+local version, dobit, bufsize, short, multi = 0, false, nil, false
 local qname, qtype, qclass = '.', kdns.type.NS, kdns.class.IN
 local flags = {'rd'}
 k = 1 while k <= #arg do
@@ -15,6 +15,7 @@ k = 1 while k <= #arg do
 			xfer, tcp = true, true
 		end
 	elseif kdns.class[v] ~= nil then qclass = kdns.class[v]
+	elseif v == '-' then multi = true
 	elseif v == '-p' then port, k = tonumber(arg[k + 1]), k + 1
 	elseif v == '-y' then key, k = kdns.tsig(arg[k + 1]), k + 1
 	elseif v == '-x' then
@@ -74,36 +75,57 @@ if host == nil then for line in io.lines('/etc/resolv.conf') do
 	host = line:match('nameserver ([0-9A-Za-z.:]+)')
 	if host ~= nil then break end
 end end
--- Create a query and send
-local query = kdns.packet(512)
-for i,flag in ipairs(flags) do query[flag](query, true) end
-query:question(kdns.dname.parse(qname), qtype, qclass)
-if dobit or (bufsize ~= nil and bufsize > 0) then
-	if bufsize == nil then bufsize = 4096 end
-	query:begin(kdns.section.ADDITIONAL)
-	local rr = kdns.edns.rrset(version, bufsize)
-	kdns.edns.dobit(rr, dobit)
-	query:put(rr)
+local queries, planned = {}, {}
+-- Create a queries
+if not multi then
+	table.insert(planned, {qname, qtype, qclass})
+else
+	for line in io.lines() do
+		local query = {'.',nil,nil}
+		for w in line:gmatch('([^%s]+)') do
+			if not query[3] and kdns.class[w] then query[3] = kdns.class[w]
+			elseif not query[2] and kdns.type[w] then query[2] = kdns.type[w]
+			else query[1] = w end
+		end
+		query[2] = query[2] or kdns.type.A
+		query[3] = query[3] or kdns.class.IN
+		table.insert(planned, query)
+	end
 end
-if key ~= nil then
-	key:sign(query)
+for _,q in ipairs(planned) do
+	local query = kdns.packet(512)
+	for i,flag in ipairs(flags) do query[flag](query, true) end
+	query:question(kdns.dname.parse(q[1]), q[2], q[3])
+	if dobit or (bufsize ~= nil and bufsize > 0) then
+		if bufsize == nil then bufsize = 4096 end
+		query:begin(kdns.section.ADDITIONAL)
+		local rr = kdns.edns.rrset(version, bufsize)
+		kdns.edns.dobit(rr, dobit)
+		query:put(rr)
+	end
+	if key ~= nil then
+		key:sign(query)
+	end
+	table.insert(queries, query)
 end
 
 -- Send and wait for answers
 local go = require('kdns.aio')
-local addr, elapsed = go.addr(host, port), go.now()
+local addr, started = go.addr(host, port), go.now()
 local send, recv = go.udpsend, go.udprecv
 if tcp then send, recv = go.tcpsend, go.tcprecv end
 assert(go(function()
 	-- Make connection to destination
 	local sock = go.socket(addr.family, tcp)
 	if tcp then -- Attempt TFO
-		go.connect(sock, addr, query:towire())
+		go.connect(sock, addr, queries[1]:towire())
 	else -- Make UDP connected socket and send query
 		go.connect(sock, addr)
-		send(sock, query:towire())
+		send(sock, queries[1]:towire())
 	end
+	for i=2,#queries do send(sock, queries[i]:towire()) end
 	-- Start receiving answers
+	for i=1,#queries do
 	local answer = kdns.packet(65535)
 	local rcvd = recv(sock, answer.wire, answer.max_size)
 	local nbytes, npkts, tsig_ok, soa = 0, 0, true, nil
@@ -118,7 +140,8 @@ assert(go(function()
 			break
 		end
 		-- Print packet
-		print(answer:tostring(short or npkts > 0))
+		local res = answer:tostring(short or npkts > 0)
+		if #res > 0 then io.write(res) end
 		nbytes, npkts = nbytes + tonumber(rcvd), npkts + 1
 		-- Decide if we should wait for more packets
 		if xfer then
@@ -137,13 +160,20 @@ assert(go(function()
 		answer:clear()
 		rcvd = xfer and recv(sock, answer.wire, answer.max_size) or 0
 	end
-	assert(nbytes > 0, '; NO ANSWER')
-	elapsed = go.now() - elapsed
+	if #queries == 1 then
+		assert(nbytes > 0, '; NO ANSWER')
+	elseif nbytes <= 0 then
+		print('; NO ANSWER')
+	end
 	-- Additional information
-	print(string.format(';; Query time: %d msec', elapsed * 1000.0))
-	print(string.format(';; SERVER: %s#%d', host, port))
-	print(string.format(';; WHEN: %s', os.date()))
-	print(string.format(';; MSG SIZE  rcvd: %d count: %d', nbytes, npkts))
+	if not short then
+		local elapsed = go.now() - started
+		print(string.format(';; Query time: %d msec', elapsed * 1000.0))
+		print(string.format(';; SERVER: %s#%d', host, port))
+		print(string.format(';; WHEN: %s', os.date()))
+		print(string.format(';; MSG SIZE  rcvd: %d count: %d', nbytes, npkts))
+	end
 	if not tsig_ok then print(string.format(';; WARNING -- Some TSIG could not be validated')) end
+	end
 end))
 return assert(go.run(3))
