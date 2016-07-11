@@ -1,7 +1,7 @@
 package = "ljdns"
 version = "0.2-1"
 source = {
-   url = "git://github.com/vavrusa/luajit-kdns"
+   url = "git://github.com/vavrusa/ljdns"
 }
 description = {
    summary = "A contemporary DNS library focused on performance using LuaJIT FFI.",
@@ -10,7 +10,7 @@ description = {
 	It supports all widely used DNS records (DNSSEC included) with a lean and mean API, including DNS primitives,
 	messages and asynchronous I/O (including coroutines, TCP Fast Open and SO_REUSEPORT), and DNS over TLS.
    ]],
-   homepage = "https://github.com/vavrusa/luajit-kdns",
+   homepage = "https://github.com/vavrusa/ljdns",
    license = "BSD"
 }
 dependencies = {

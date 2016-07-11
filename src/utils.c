@@ -7,6 +7,11 @@
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
+/* Compatibility with C89 */
+#if __STDC_VERSION__ < 199901L
+#define restrict
+#endif
+
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs)
 {
 	/* Assume input is already checked/sanitized. */
