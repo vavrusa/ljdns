@@ -247,4 +247,46 @@ assert(writes == 1)
 assert(reads == 1)
 -- Must be finished by now
 assert(go.coroutines == 0)
+
+-- Test LMDB interface
+local S = require('syscall')
+local lmdb = require('kdns.lmdb')
+local tmpdir = string.format('.tmpdb%d', os.time())
+if S.stat(tmpdir) then
+	S.util.rm(tmpdir)
+end
+S.mkdir(tmpdir, '0755')
+-- Test environment and opening DB handle
+local env = assert(lmdb.open(tmpdir, 'writemap', 512*1024))
+local txn, db = assert(env:open())
+-- Test key set/retrieval
+assert(txn:get('test') == nil, 'lmdb: get non-existent')
+assert(txn:put('test', 'val'), 'lmdb: put')
+assert(not txn:put('test', 'lav', 'nooverwrite'), 'lmdb: put duplicate key')
+assert(tostring(txn:get('test')) == 'val', 'lmdb: get')
+assert(txn:commit())
+-- Test reopen
+txn = assert(env:txn(db, 'rdonly'))
+assert(not txn:put('test', 'invalid'), 'lmdb: put in read-only txn')
+assert(tostring(txn:get('test')) == 'val', 'lmdb: get')
+txn:abort()
+txn = assert(env:txn(db))
+-- Test low-level key/value API
+local key = lmdb.val_t(4, 'abcd')
+local val = lmdb.val_t(4, 'efgh')
+assert(txn:put(key, val), 'lmdb: put #2')
+local has = lmdb.val_t()
+assert(txn:get(key, has), 'lmdb: get #2')
+assert(val.size == has.size, 'lmdb: cmp len')
+assert(tostring(val) == tostring(has), 'lmdb: cmp value')
+-- Iterate over keys
+local cur = txn:cursor()
+for i,v in ipairs(cur) do
+	assert(i and v)
+end
+cur:close()
+-- Cleanup
+txn:abort()
+S.util.rm(tmpdir)
+print('[ OK ] kdns.lmdb')
 print('[ OK ] kdns')

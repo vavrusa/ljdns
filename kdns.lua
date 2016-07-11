@@ -711,7 +711,7 @@ ffi.metatype( knot_pkt_t, {
 			local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
 				const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
 			local flags = {}
-			for k,v in pairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
+			for _,v in ipairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
 				if(pkt[v](pkt)) then table.insert(flags, v) end
 			end
 			local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',

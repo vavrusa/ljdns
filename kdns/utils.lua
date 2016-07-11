@@ -193,6 +193,18 @@ function utils.buffer_grow(arr)
 	return true
 end
 
+-- Search key representing owner/type pair
+-- format: { u8 name [1-255], u16 type }
+local function searchkey(owner, type, buf)
+	local nlen = dnamelen(owner)
+	if not buf then buf = ffi.new('char [?]', nlen + 3) end
+	ffi.copy(buf, owner.bytes, nlen + 1)
+	buf[nlen + 1] = bit.rshift(bit.band(type, 0xff00), 8)
+	buf[nlen + 2] = bit.band(type, 0x00ff)
+	return buf, nlen + 3
+end
+utils.searchkey = searchkey
+
 -- Export basic OS operations
 local _, S = pcall(require, 'syscall')
 if S then

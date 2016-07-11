@@ -363,8 +363,7 @@ Sift is a higher-level interface over zone parser that allows you to either filt
 using your own or predefined filters, and capture the results. This can be used to build a sorted
 set of RR sets, i.e. a *"zone"*.
 
-The results can be either captured as a sorted set in memory, printed out, converted to JSON,
-or passed to caller-provided closure for custom processing.
+The results can be either captured in [LMDB][lmdb] on-disk, as a sorted set in memory, printed out, converted to JSON, or passed to caller-provided closure for any other custom processing.
 
 ```lua
 local sift = require('kdns.sift')
@@ -375,10 +374,15 @@ local cap, err = sift.zone(zone, sift.jsonify())
 -- Load text zone into sorted set
 local set, err = sift.zone(zone, sift.set())
 if not set then error(err) end
+-- Load text zone into LMDB
+local env = assert(lmdb.open('.', 'writemap, mapasync'))
+local set, inserted, db = sift.zone(zone, sift.lmdb(env))
 ```
 
+### Working with sorted set
+
 The sorted set is structured, so we can perform further actions with it like sort/resort or lookups.
-Note that the set is sorted in terms of [RFC4034](https://tools.ietf.org/html/rfc4034#section-6.1) canonical name ordering and may be used for DNSSEC purposes.
+Note that the set is sorted in terms of [RFC4034](https://tools.ietf.org/html/rfc4034#section-6.1) canonical name ordering and may be used for DNSSEC purposes. The search algorithm is a binary search to keep things simple, while still getting a decent performance.
 
 ```lua
 -- Sort the set captured from previous example
@@ -394,6 +398,47 @@ end
 -- This allows a faster search if the set size doesn't change
 local searcher = set:searcher()
 local rr = searcher(qname)
+```
+
+### Working with LMDB storage
+
+LMDB is file-backed key-value storage, that means it can also be persistent so you can keep results
+between program execution or do fast resumption. You want this backend if read performance is a key, or the data will be shared between several instances. Unlike sorted set, the interface is based around transactions and cursors to get consistent view of the data, and doesn't need resorting after insertion. The value is also generic array of bytes, so you can store anything. Records map *"search keys"*,
+composed of domain name and type, to raw record data stored as `{u32 ttl, u8 ttl[...]}`.
+
+```lua
+-- Start a read transaction and read a key
+local txn = assert(set:txn(db, 'rdonly'))
+-- Convert to search key
+local key, len = utils.searchkey('\5query\3com', kdns.type.AAAA)
+-- Retrieve stored value
+local value = txn:get(lmdb.val_t(len, key))
+-- Deserialize (example)
+local ttl = ffi.new('uint32_t [1]')
+ffi.copy(ttl, value.data, ffi.sizeof(ttl))
+local rdata = ffi.string(value.data + ffi.sizeof(ttl), value.size - ffi.sizeof(ttl))
+-- Abort read transaction
+txn:abort()
+```
+
+You can also use the database to read and write generic key-value pairs.
+Inserting to database requires write transaction, otherwise it's straightforward.
+
+```lua
+local txn = assert(set:txn(db))
+txn:put('test', 'val')          -- Inserted `test => val`
+print(tostring(txn:get('test')) -- Values support tostring()
+```
+
+Iterating over database requires transaction cursors. They are compatible with
+both `pairs()` and `ipairs()` iterators in Lua.
+
+```lua
+local cur = txn:cursor()
+for i,v in ipairs(cur) do
+	print(i, tostring(v))
+end
+cur:close()
 ```
 
 ### Filter algebra
@@ -476,13 +521,16 @@ zone, use the `examples/bench.lua` script. Here's an example on a synthetic zone
 
 ```lua
 $ luajit examples/bench.lua zones/example.com.1m 
-load: 683.11 msec (1000010 rrs)
-sort: in 1234.42 msec
-search: 923914 ops/sec
+bench: sortedset
+load: 696.21 msec (1000010 rrs)
+sort: in 1242.84 msec
+search: 1598646 ops/sec
+bench: lmdb
+load: 1089.06 msec (1000010 rrs)
+search: 5416827 ops/sec
 ```
 
-This means it parsed and loaded a zone with million records into memory under 2 seconds, and is able to perform
-nearly 1M lookups per second on my laptop.
+This means it parsed and loaded a zone with million records into memory under 2 seconds, and is able to perform over 1.5M lookups per second over sorted set, and 5.4M lookups per second with LMDB.
 
 ## Asynchronous I/O
 

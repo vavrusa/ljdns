@@ -251,7 +251,7 @@ end
 local function connect(sock, addr, buf, buflen)
 	local packed_msg = nil
 	if buf and addr and c.MSG.FASTOPEN then
-		-- Need to serialze data for first message (no writev support)
+		-- Need to serialize data for first message (no writev support)
 		if not buflen then buflen = #buf end
 		packed_msg = ffi.new('uint8_t [?]', buflen + 2)
 		local txlen = ffi.cast('uint16_t *', packed_msg)

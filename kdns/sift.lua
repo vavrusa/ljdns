@@ -1,6 +1,6 @@
 local ffi = require('ffi')
 local kdns = require('kdns')
-local rrparser = require('kdns.rrparser')
+local utils, rrparser = require('kdns.utils'), require('kdns.rrparser')
 local sift = {}
 
 -- Compile query string/table into filter function
@@ -86,9 +86,9 @@ end
 
 local function sink_print()
 	local count = 0
-	return function (owner, rtype, ttl, rdata)
+	return function (owner, type, ttl, rdata)
 		if not owner then return count end
-		io.write(kdns.rrset(owner, rtype):add(rdata, ttl):tostring())
+		io.write(kdns.rrset(owner, type):add(rdata, ttl):tostring())
 		count = count + 1
 		return true
 	end
@@ -105,13 +105,43 @@ end
 
 local function sink_set()
 	local capture = rrparser.set()
+	local inserted = 0
 	return function (owner, type, ttl, rdata)
-		if not owner then return capture end
+		if not owner then return capture, inserted end
 		-- We'll initialize pre-allocated block to save some ticks
 		local rrset = capture:newrr(true)
 		rrset.raw_owner = nil
 		rrset.raw_data = nil
 		rrset:init(owner, type):add(rdata, ttl)
+		inserted = inserted + 1
+		return true
+	end
+end
+
+local lmdb_ok, lmdb = pcall(require, 'kdns.lmdb')
+local function sink_lmdb(env, db, txn)
+	if not lmdb_ok then return nil, 'lmdb sink not supported' end
+	if not db then txn, db = assert(env:open()) end
+	local key, val = lmdb.val_t(), lmdb.val_t()
+	local keybuf = ffi.new('char [?]', 512)
+	local ttlbuf = ffi.new('uint32_t [1]')
+	local inserted = 0
+	return function (owner, type, ttl, rdata)
+		if not owner then
+			txn:commit()
+			return env, inserted, db
+		end
+		-- Create search key
+		key.data, key.size = utils.searchkey(owner, type)
+		-- Insert into LMDB
+		local rdlen = #rdata
+		val.data, val.size = nil, ffi.sizeof(ttlbuf) + rdlen
+		assert(txn:put(key, val, 'reserve'))
+		-- Serialize RR set
+		ttlbuf[0] = ttl
+		ffi.copy(val.data, ttlbuf, ffi.sizeof(ttlbuf))
+		ffi.copy(ffi.cast('char *', val.data) + ffi.sizeof(ttlbuf), rdata, rdlen)
+		inserted = inserted + 1
 		return true
 	end
 end
@@ -159,4 +189,5 @@ return {
 	jsonify = sink_json,
 	table = sink_table,
 	set = sink_set,
+	lmdb = sink_lmdb,
 }
