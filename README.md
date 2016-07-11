@@ -1,7 +1,7 @@
 # The DNS library for LuaJIT
 
 A contemporary DNS library using [LuaJIT FFI] focused on performance, and a lightning-fast [zone file parser][zscanner].
-It supports all widely used DNS records (DNSSEC included) with a lean and mean API, including DNS primitives, messages and asynchronous I/O (including coroutines, TCP Fast Open and SO_REUSEPORT).
+It supports all widely used DNS records (DNSSEC included) with a lean and mean API, including DNS primitives, messages and asynchronous I/O (including coroutines, TCP Fast Open and SO_REUSEPORT), and DNS over TLS.
 
 ## Installation
 
@@ -681,7 +681,44 @@ while true do
 end
 ```
 
-Also, a single socket may have only 1 reader and 1 writer at the same time. Use socket dup'ing to avoid multiple coroutines blocking on the same socket. 
+Also, a single socket may have only 1 reader and 1 writer at the same time. Use socket dup'ing to avoid multiple coroutines blocking on the same socket.
+
+## DNS over TLS
+
+The library supports upgrading TCP connections to [RFC7858][rfc7858] DNS over TLS for both server and client. The `dig.lua` example has demo client-side code with `+tls` option, it supports pipelining with TLS too. Usage is straightforward, each accepted connection must be upgraded to TLS prior its use:
+
+```lua
+local tls = require('kdns.tls')
+-- Open X.509 credentials
+local cred = tls.creds.x509 {
+	certfile = 'test.crt',
+	keyfile = 'test.key',
+}
+local client = go.accept(server)
+-- Upgrade to TLS with X.509 certificate
+client = assert(tls.server(client, cred))
+local ret, err = go.tcprecv(client)
+```
+
+Client code works similarly, unfortunately DNS/TLS cannot be used together with [TFO][tcp-fastopen] because the handshake is done by the underlying library (GnuTLS) over already connected socket.
+
+```lua
+local client = go.socket('inet', true)
+go.connect(client, server:getsockname())
+-- Upgrade to TLS without X.509 client certificate
+client = assert(tls.client(client, 'x509'))
+```
+
+Client can also provide client certificate and provide trusted CA bundle, however currently the server in this library doesn't do peer verification, so keep in mind that it's not good for production use.
+
+```lua
+-- Upgrade to TLS with X.509 client certificate
+client = assert(tls.client(client, tls.creds.x509 {
+	cafile   = 'ca-cert.pem', -- CA bundle in PEM format
+	certfile = 'client.crt',  -- Client certificate
+	keyfile  = 'client.key',  -- Client key
+}))
+```
 
 [LuaJIT FFI]: http://luajit.org/ext_ffi.html
 [LuaJIT]: http://luajit.org
@@ -691,3 +728,5 @@ Also, a single socket may have only 1 reader and 1 writer at the same time. Use 
 [knot-readme]: https://github.com/CZ-NIC/knot/blob/master/README
 [ljsyscall]: http://myriabit.com/ljsyscall/
 [tcp-fastopen]: https://tools.ietf.org/html/draft-ietf-tcpm-fastopen-10
+[rfc7858]: https://datatracker.ietf.org/doc/rfc7858
+[lmdb]: https://symas.com/products/lightning-memory-mapped-database/

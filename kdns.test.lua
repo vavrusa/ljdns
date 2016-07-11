@@ -289,4 +289,42 @@ cur:close()
 txn:abort()
 S.util.rm(tmpdir)
 print('[ OK ] kdns.lmdb')
+
+-- Test TLS
+local go = require('kdns.aio')
+local server = go.socket(go.addr('127.0.0.1', 0), true)
+local tls = require('kdns.tls')
+-- Function sends PING to client, expects PONG back
+local writes, reads = 0, 0
+assert(go(function ()
+	local client = go.accept(server)
+	-- Upgrade to TLS
+	client = assert(tls.server(client, tls.creds.x509 {
+		certfile = 'test.crt',
+		keyfile = 'test.key',
+	}))
+	local ret, err = go.tcprecv(client)
+	assert(ret == 'PING')
+	reads = reads + 1
+	ret, err = go.tcpsend(client, 'PONG')
+	writes = writes + 1
+end))
+assert(go(function ()
+	local client = go.socket('inet', true)
+	go.connect(client, server:getsockname())
+	-- Upgrade to TLS
+	client = assert(tls.client(client, 'x509'))
+	go.tcpsend(client, 'PING')
+	local msg, err = go.tcprecv(client)
+	assert(msg == 'PONG')
+end))
+-- Execute both coroutines
+assert(go.coroutines == 2)
+assert(go.run(1))
+-- Evaluate results
+assert(writes == 1)
+assert(reads == 1)
+-- Must be finished by now
+assert(go.coroutines == 0)
+
 print('[ OK ] kdns')

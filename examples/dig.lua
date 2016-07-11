@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 local kdns = require('kdns')
 -- Parse parameters
-local host, port, tcp, xfer, key = nil, 53, false, false, nil
+local host, port, tcp, tls, xfer, key = nil, 53, false, false, false, nil
 local version, dobit, bufsize, short, multi = 0, false, nil, false
 local qname, qtype, qclass = '.', kdns.type.NS, kdns.class.IN
 local flags = {'rd'}
@@ -45,6 +45,7 @@ k = 1 while k <= #arg do
 		end
 	elseif v == '+short' then short = true
 	elseif v == '+tcp' then tcp = true
+	elseif v == '+tls' then tls = true tcp = true
 	elseif v == '+cd' then table.insert(flags, 'cd')
 	elseif v == '+do' or v == '+dnssec' then dobit = true
 	elseif v == '-h' or v == '--help' then
@@ -54,6 +55,7 @@ k = 1 while k <= #arg do
 		print('\t-y <tsig> use TSIG key (default: none, example: "testkey:hmac-md5:Wg==")')
 		print('\t-x <ip>   do a reverse lookup')
 		print('\t+tcp      use TCP for transport')
+		print('\t+tls      use TLS for transport')
 		print('\t+short    print only answer records')
 		print('\t+cd       DNSSEC checking disabled')
 		print('\t+do       request DNSSEC records')
@@ -117,10 +119,13 @@ if tcp then send, recv = go.tcpsend, go.tcprecv end
 assert(go(function()
 	-- Make connection to destination
 	local sock = go.socket(addr.family, tcp)
-	if tcp then -- Attempt TFO
+	if tcp and not tls then -- Attempt TFO
 		go.connect(sock, addr, queries[1]:towire())
-	else -- Make UDP connected socket and send query
+	else -- Make connected socket and send query
 		go.connect(sock, addr)
+		if tls then -- Upgrade to TLS
+			sock = assert(require('kdns.tls').client(sock, 'x509'))
+		end
 		send(sock, queries[1]:towire())
 	end
 	for i=2,#queries do send(sock, queries[i]:towire()) end

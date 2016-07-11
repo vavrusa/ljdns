@@ -44,7 +44,7 @@ namepile - poor man's zone transfer server
 
 This is a simple daemon that provides zone transfers for a pile of zones
 It expects to find files ending with .zone, zones are parsed and streamed on demand,
-so free startup time and no memory requirements.
+so immediate startup and no significant memory requirements.
 
 ```bash
 $ mkdir pile

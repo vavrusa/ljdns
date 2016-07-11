@@ -307,7 +307,7 @@ local function resume(curlist, fd)
 		return false, nextlist
 	end
 	-- Transfer ownerwhip to a different waitlist
-	enqueue(nextlist, co, what)
+	enqueue(nextlist or M.readers, co, what)
 	-- Stop listening for current operation if the coroutine changed
 	if fd ~= what:getfd() or curlist ~= nextlist then
 		assert(M.pollfd:del(fd, curlist == M.writers))
@@ -325,7 +325,7 @@ local function start(closure, ...)
 		return ok, list
 	end
 	M.coroutines = M.coroutines + 1
-	enqueue(list, co, what)
+	enqueue(list or M.readers, co, what)
 	assert(M.pollfd:add(what:getfd(), list == M.writers))
 	return co
 end
