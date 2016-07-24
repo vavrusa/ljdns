@@ -142,8 +142,8 @@ ffi.metatype('tls_session_t', {
 })
 
 -- Check GnuTLS version before initializing
-if gnutls.gnutls_check_version('3.4.6') == nil then
-    error('GnuTLS 3.4.6 or later is required')
+if gnutls.gnutls_check_version('3.3.0') == nil then
+    error('GnuTLS 3.3.0 or later is required')
 end
 
 local creds = {open = {}}
