@@ -16,6 +16,10 @@ make install
 - [libknot][libknot] - isn't bundled, and must be [installed separately][knot-readme].
 
 
+## Tools
+
+The library provides several utilities for convenience, see [tools/README.md](tools/README.md).
+
 ## Constants
 
 There are numeric constants for DNS classes, types, opcodes and rcodes. Since they're constants, LuaJIT can inline them. You can convert them back to the text representation with `kdns.tostring`.

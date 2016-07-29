@@ -1,5 +1,5 @@
 package = "ljdns"
-version = "0.2-1"
+version = "0.2-2"
 source = {
    url = "git://github.com/vavrusa/ljdns"
 }
@@ -29,9 +29,9 @@ build = {
   type = "builtin",
   install = {
     bin = {
-      zq = "examples/zq.lua",
-      ldig = "examples/dig.lua",
-      namepile = "examples/namepile.lua"
+      zq = "tools/zq.lua",
+      ldig = "tools/ldig.lua",
+      namepile = "tools/namepile.lua"
     }
   },
   modules = {

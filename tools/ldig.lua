@@ -16,6 +16,7 @@ k = 1 while k <= #arg do
 		end
 	elseif kdns.class[v] ~= nil then qclass = kdns.class[v]
 	elseif v == '-' then multi = true
+	elseif v == '-f' then short, k = arg[k + 1], k + 1
 	elseif v == '-p' then port, k = tonumber(arg[k + 1]), k + 1
 	elseif v == '-y' then key, k = kdns.tsig(arg[k + 1]), k + 1
 	elseif v == '-x' then
@@ -45,7 +46,9 @@ k = 1 while k <= #arg do
 		end
 	elseif v == '+short' then short = true
 	elseif v == '+tcp' then tcp = true
-	elseif v == '+tls' then tls = true tcp = true
+	elseif v == '+tls' then
+		tls, tcp = true, true
+		if port == 53 then port = 853 end
 	elseif v == '+cd' then table.insert(flags, 'cd')
 	elseif v == '+do' or v == '+dnssec' then dobit = true
 	elseif v == '-h' or v == '--help' then
@@ -165,20 +168,20 @@ assert(go(function()
 		answer:clear()
 		rcvd = xfer and recv(sock, answer.wire, answer.max_size) or 0
 	end
-	if #queries == 1 then
-		assert(nbytes > 0, '; NO ANSWER')
-	elseif nbytes <= 0 then
-		print('; NO ANSWER')
-	end
 	-- Additional information
 	if not short then
+		if #queries == 1 then
+			assert(nbytes > 0, '; NO ANSWER')
+		elseif nbytes <= 0 then
+			print('; NO ANSWER')
+		end
 		local elapsed = go.now() - started
 		print(string.format(';; Query time: %d msec', elapsed * 1000.0))
 		print(string.format(';; SERVER: %s#%d', host, port))
 		print(string.format(';; WHEN: %s', os.date()))
 		print(string.format(';; MSG SIZE  rcvd: %d count: %d', nbytes, npkts))
+		if not tsig_ok then print(string.format(';; WARNING -- Some TSIG could not be validated')) end
 	end
-	if not tsig_ok then print(string.format(';; WARNING -- Some TSIG could not be validated')) end
 	end
 end))
 return assert(go.run(3))
