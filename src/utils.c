@@ -15,6 +15,7 @@
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs)
 {
 	/* Assume input is already checked/sanitized. */
+	int i = 0;
 	uint8_t lstack[128], rstack[128];
 	uint8_t *restrict ltop = lstack + sizeof(lstack);
 	uint8_t *restrict rtop = rstack + sizeof(rstack);
@@ -35,7 +36,7 @@ int dnamecmp(const uint8_t *lhs, const uint8_t *rhs)
 	/* Compare reordered labels from last to first */
 	lp = lstack + sizeof(lstack) - ltop; /* Reuse to avoid register spill */
 	rp = rstack + sizeof(rstack) - rtop;
-	for (int i = 0; i < MIN(lp, rp); ++i) {
+	for (i = 0; i < MIN(lp, rp); ++i) {
 		const uint8_t *restrict left = lhs + ltop[i];
 		const uint8_t *restrict right = rhs + rtop[i];
 		const int diff = left[0] - right[0]; /* Speculative */

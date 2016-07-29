@@ -148,32 +148,53 @@ end
 
 local function sink_json()
 	local capture = {}
+	local rr = ffi.gc(kdns.rrset(nil, 0), kdns.rrset.clear)
+	local fmt = '{ "name": "%s", "type": %d, "TTL": %d, "data": %s }'
 	return function (owner, type, ttl, rdata)
 		if not owner then
-			for i,v in ipairs(capture) do
-				local owner, ttl, type, rdata = v:match("(%S+)%s+(%d+)%s+(%S+)%s+([^\n]+)\n")
-				capture[i] = string.format('{ "owner": "%s", "type": "%s", "ttl": %d, "rdata": "%s" }',
-					owner:gsub('\\','\\\\'), type, ttl, rdata)
-			end
 			return string.format('[%s]', table.concat(capture, ','))
 		end
-		table.insert(capture, kdns.rrset(owner, type):add(rdata, ttl):tostring())
+		-- Set data for RR set for printing
+		rr.raw_type = type
+		rr:add(rdata, ttl)
+		-- Convert to JSON entry
+		local rdata_text = rr:tostring(0)
+		if rdata_text:byte() ~= 34 then
+			rdata_text = '"'..rdata_text..'"'
+		end
+		table.insert(capture, string.format(fmt, owner, type, ttl, rdata_text))
+		rr:clear()
 		return true
 	end
 end
 
-local function zone(zone, sink, filter)
+local function zone(zone, sink, filter, limit)
 	if not zone then return false end
+	-- Create sink and parser instance
 	if not sink then sink = sink_print() end
 	local parser = assert(rrparser.new())
 	local ok, err = parser:open(zone)
 	if not ok then
 		return ok, err
 	end
+	-- Process all records
+	local last_name = nil
 	while parser:parse() do
 		local owner_dname = kdns.todname(parser.r_owner)
 		local rdata = ffi.string(parser.r_data, parser.r_data_length)
+		-- When limit is placed on the number of results, continue matching
+		-- results only as long as owner doesn't change, after that, stop
+		if last_name then
+			if not last_name:equals(owner_dname) then break end
+		end
+		-- Match current record against filter
 		if not filter or filter(owner_dname, parser.r_type, parser.r_ttl, rdata) then
+			-- When limit is placed on the number of results, continue matching
+			-- results only as long as owner doesn't change, after that, stop
+			if not last_name and limit then
+				limit = limit - 1
+				if limit <= 0 then last_name = owner_dname:copy() end
+			end
 			if not sink(owner_dname, parser.r_type, parser.r_ttl, rdata) then
 				break
 			end

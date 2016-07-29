@@ -8,6 +8,7 @@ local function help()
 	print('Options:')
 	print('\t-h,--help        ... print this help')
 	print('\t-s               ... sort output in canonical order')
+	print('\t-1               ... get first result only')
 	print('\t-f text|json     ... format output to appropriate format')
 	print('Example filters:')
 	print('\tSOA              ... search for all SOA records')
@@ -21,13 +22,14 @@ local function help()
 end
 -- Parse CLI arguments
 if #arg < 1 then help() return 1 end
-local zone, format, timeit, sort, query = nil, 'text', false, false, {}
+local zone, format, timeit, sort, limit, query = nil, 'text', false, false, nil, {}
 local filters, farg = {}, {}
 k = 1 while k <= #arg do
 	local v = arg[k]
 	if v == '-h' or v == '--help' then return help()
 	elseif v == '-t' then timeit = true
 	elseif v == '-s' then sort = true
+	elseif v == '-1' then limit = 1
 	elseif v == '-f' then
 		k = k + 1
 		format = arg[k]
@@ -50,7 +52,7 @@ if sort then
 end
 -- Filter stream
 local elapsed = timeit and kdns.io.now()
-local cap, err = sift.zone(zone, sink, filter)
+local cap, err = sift.zone(zone, sink, filter, limit)
 if not cap then
 	error(err)
 end

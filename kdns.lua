@@ -96,6 +96,7 @@ uint8_t *knot_rdata_data(const knot_rdata_t *rr);
 uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
 int knot_rrset_txt_dump(const knot_rrset_t *rrset, char *dst, size_t maxlen, const knot_dump_style_t *style);
+int knot_rrset_txt_dump_data(const knot_rrset_t *rrset, size_t pos, char *dst, size_t maxlen, const knot_dump_style_t *style);
 int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);
 /* opt rr */
 uint8_t knot_edns_get_version(const knot_rrset_t *opt_rr);
@@ -253,6 +254,9 @@ local const_opcode_str = {
 local const_section_str = {
 	[0] = 'ANSWER', [1] = 'AUTHORITY', [2] = 'ADDITIONAL',
 }
+local const_section_str_lower = {
+	[0] = 'Answer', [1] = 'Authority', [2] = 'Additional',
+}
 local const_rcode_tsig_str = {
 	[16] = 'BADSIG', [17] = 'BADKEY', [18] = 'BADTIME', [19] = 'BADTRUNC'
 }
@@ -301,7 +305,7 @@ ffi.metatype( knot_dname_t, {
 			-- for dname wire check, this is slower than comparing casted values
 			if type(b) == 'string' then b = knot_dname_t(b) end
 			local l1, l2 = a:len(), b:len()
-			return l1 == l2 and ffi.C.memcmp(a.bytes, b.bytes, l1)
+			return l1 == l2 and (ffi.C.memcmp(a.bytes, b.bytes, l1) == 0)
 		end,
 		compare = function(a, b)
 			assert(ffi.istype(knot_dname_t, a))
@@ -476,11 +480,16 @@ ffi.metatype( knot_rrset_t, {
 				rr.raw_data = nil
 			end
 		end,
-		tostring = function(rr, buf)
+		tostring = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
-			if rr.raw_owner == nil then return end
 			if rr:count() > 0 then
-				local ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
+				local ret = -1
+				if i then
+					ret = knot.knot_rrset_txt_dump_data(rr, i, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
+				else
+					if rr.raw_owner == nil then return end -- Uninitialised RR set
+					ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
+				end
 				return ret >= 0 and ffi.string(rrset_buf)
 			else
 				return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
@@ -556,20 +565,78 @@ local function pkt_flags(pkt, idx, off, val)
 end
 local function section_tostring(pkt, sec_id, plain)
 	local data = {}
+	local tojson = (plain == 'json')
 	local section = knot.knot_pkt_section(pkt, sec_id)
 	if section.count > 0 then
-		if plain ~= true then
+		if not plain then
 			table.insert(data, string.format(';; %s\n', const_section_str[sec_id]))
 		end
 		for j = 0, section.count - 1 do
 			local rrset = knot.knot_pkt_rr(section, j)
 			local rrtype = rrset:type()
 			if rrtype ~= const_type.OPT and rrtype ~= const_type.TSIG then
-				table.insert(data, rrset:tostring())
+				if tojson then
+					-- In packet only one RR is stored per RR set structure
+					-- so we can convert only first RDATA to text
+					table.insert(data, string.format(
+						'{"name": "%s", "type": %d, "TTL": %d, "data": "%s"}',
+						rrset:owner(), rrset:type(), rrset:ttl(), rrset:tostring(0)))
+				else
+					table.insert(data, rrset:tostring())
+				end
 			end
 		end
 	end
-	return table.concat(data, '')
+	return table.concat(data, tojson and ',' or '')
+end
+local function packet_tostring(pkt)
+	local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
+		const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
+	local flags = {}
+	for _,v in ipairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
+		if(pkt[v](pkt)) then table.insert(flags, v) end
+	end
+	local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',
+		table.concat(flags, ' '), pkt:qdcount(), pkt:ancount(), pkt:nscount(), pkt:arcount())
+	local data = '\n'
+	if pkt.opt ~= nil then
+		local opt = pkt.opt
+		data = data..string.format(';; OPT PSEUDOSECTION:\n; EDNS: version: %d, flags:%s; udp: %d\n',
+			edns_version(opt), edns_do(opt) and ' do' or '', edns_payload(opt))
+	end
+	if pkt.tsig ~= nil then
+		data = data..string.format(';; TSIG PSEUDOSECTION:\n%s', pkt.tsig:tostring())
+	end
+	local qtype = pkt:qtype()
+	-- Zone transfer answers may omit question
+	if pkt:qdcount() > 0 then
+		data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
+			pkt:qname(), const_type_str[pkt:qtype()], const_class_str[pkt:qclass()])
+	end
+	local data_sec = {}
+	for i = const_section.ANSWER, const_section.ADDITIONAL do
+		table.insert(data_sec, section_tostring(pkt, i))
+	end
+	return hdr..info..data..table.concat(data_sec, '')
+end
+local function packet_tojson(pkt)
+	local data = {}
+	-- Serialise header
+	table.insert(data, string.format('"Status": %d,"TC": %s,"RD": %s, "RA": %s, "AD": %s,"CD": %s',
+		pkt:rcode(), pkt:tc(), pkt:rd(), pkt:ra(), pkt:ad(), pkt:cd()))
+	-- Optional question
+	if pkt:qdcount() > 0 then
+		table.insert(data, string.format('"Question":[{"name": "%s", "type": %d}]', pkt:qname(), pkt:qtype()))
+	end
+	-- Record sections
+	for i = const_section.ANSWER, const_section.ADDITIONAL do
+		local res = section_tostring(pkt, i, 'json')
+		if #res > 0 then
+			res = string.format('"%s":[%s]', const_section_str_lower[i], res)
+			table.insert(data, res)
+		end
+	end
+	return string.format('{%s}', table.concat(data, ','))
 end
 -- RR insertion doesn't copy RR and is opaque to LuaJIT GC, we must track RRs that packet touched
 local pkt_refs = {}
@@ -707,35 +774,13 @@ ffi.metatype( knot_pkt_t, {
 			return ffi.string(pkt.wire, pkt.size)
 		end,
 		tostring = function(pkt, short)
-			if short then return section_tostring(pkt, const_section.ANSWER, true) end
-			local hdr = string.format(';; ->>HEADER<<- opcode: %s; status: %s; id: %d\n',
-				const_opcode_str[pkt:opcode()], const_rcode_str[pkt:rcode()], pkt:id())
-			local flags = {}
-			for _,v in ipairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
-				if(pkt[v](pkt)) then table.insert(flags, v) end
+			if short == true then
+				return section_tostring(pkt, const_section.ANSWER, true)
+			elseif short == 'json' then
+				return packet_tojson(pkt)
+			else
+				return packet_tostring(pkt)
 			end
-			local info = string.format(';; Flags: %s; QUERY: %d; ANSWER: %d; AUTHORITY: %d; ADDITIONAL: %d\n',
-				table.concat(flags, ' '), pkt:qdcount(), pkt:ancount(), pkt:nscount(), pkt:arcount())
-			local data = '\n'
-			if pkt.opt ~= nil then
-				local opt = pkt.opt
-				data = data..string.format(';; OPT PSEUDOSECTION:\n; EDNS: version: %d, flags:%s; udp: %d\n',
-					edns_version(opt), edns_do(opt) and ' do' or '', edns_payload(opt))
-			end
-			if pkt.tsig ~= nil then
-				data = data..string.format(';; TSIG PSEUDOSECTION:\n%s', pkt.tsig:tostring())
-			end
-			local qtype = pkt:qtype()
-			-- Zone transfer answers may omit question
-			if pkt:qdcount() > 0 then
-				data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
-					pkt:qname(), const_type_str[pkt:qtype()], const_class_str[pkt:qclass()])
-			end
-			local data_sec = {}
-			for i = const_section.ANSWER, const_section.ADDITIONAL do
-				table.insert(data_sec, section_tostring(pkt, i))
-			end
-			return hdr..info..data..table.concat(data_sec, '')
 		end,
 		answers = function (pkt, query)
 			return pkt:qr() and pkt:id() == query:id() and pkt:qclass() == query:qclass()

@@ -54,9 +54,10 @@ k = 1 while k <= #arg do
 	elseif v == '-h' or v == '--help' then
 		print(string.format('Usage: %s [options] [@server] [type] [class] [domain]', arg[0]))
 		print('Options:')
-		print('\t-p <num>  server port number (default: 53)')
+		print('\t-p <num>  server port number (default: 53, 853 for +tls)')
 		print('\t-y <tsig> use TSIG key (default: none, example: "testkey:hmac-md5:Wg==")')
 		print('\t-x <ip>   do a reverse lookup')
+		print('\t-f json   return DNS response as JSON')
 		print('\t+tcp      use TCP for transport')
 		print('\t+tls      use TLS for transport')
 		print('\t+short    print only answer records')
