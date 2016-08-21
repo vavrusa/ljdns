@@ -116,7 +116,7 @@ local function sink_set()
 	end
 end
 
-local lmdb_ok, lmdb = pcall(require, 'kdns.lmdb')
+local lmdb_ok, lmdb = pcall(require, 'dns.lmdb')
 local function sink_lmdb(env, db, txn)
 	if not lmdb_ok then return nil, 'lmdb sink not supported' end
 	if not db then txn, db = assert(env:open()) end

@@ -6,6 +6,7 @@ return {
 	},
 	default = {
 		lpath = "./?.lua",
+		helper = "spec/helper.lua",
 		["auto-insulate"] = false,
 	}
 }

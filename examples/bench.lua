@@ -2,7 +2,10 @@
 local kdns = require('dns')
 local sift, utils = require('dns.sift'), require('dns.utils')
 local aio = require('dns.aio')
-local lmdb_ok, lmdb = pcall(require, 'kdns.lmdb')
+local lmdb_ok, lmdb = pcall(require, 'dns.lmdb')
+local dnssec_ok, dnssec = pcall(require, 'dns.dnssec')
+
+assert(arg[1], 'usage: bench.lua <zonefile>')
 
 local function bench_sift(backend)
 	-- Load up zone
@@ -22,7 +25,7 @@ local function bench_sortedset(set, step)
 	print(string.format('sort: in %.02f msec', elapsed * 1000.0))
 	-- Perform random queries
 	local queries = {}
-	for i = 1, #set, step do
+	for i = 0, #set - 1, step do
 		local qname = set.at[i]:owner()
 		table.insert(queries, qname)
 	end
@@ -66,6 +69,33 @@ local function bench_lmdb(env, db, step)
 	print(string.format('search: %d ops/sec', 100000 / elapsed))
 end
 
+local function bench_signer(set, test_key)
+	local limit = 10000 - 1
+	-- Sign selected records in the set
+	local key = dnssec.key()
+	assert(key:algo(test_key.algorithm))
+	assert(key:privkey(test_key.pem))
+	assert(key:can_sign())
+	local elapsed = aio.now()
+	local signer = dnssec.signer(key)
+	local rrsigs = {}
+	for i = 0, #set - 1 do
+		local rr = set.at[i]
+		table.insert(rrsigs, signer:sign(rr))
+		if i == limit then break end
+	end
+	elapsed = aio.now() - elapsed
+	print(string.format('%s sign: %d ops/sec', test_key.name, #rrsigs / elapsed))
+	-- Verify signatures in the set
+	elapsed = aio.now()
+	for i, rrsig in ipairs(rrsigs) do
+		local rr = set.at[i - 1]
+		assert(signer:verify(rr, rrsig))
+	end
+	elapsed = aio.now() - elapsed
+	print(string.format('%s verify: %d ops/sec', test_key.name, #rrsigs / elapsed))
+end
+
 -- Sorted set + binary search
 print('bench: sortedset')
 local set, err, step = bench_sift(sift.set())
@@ -86,4 +116,13 @@ if lmdb_ok then
 		bench_lmdb(env, db, step)
 	end
 	S.util.rm(tmpdir)
+end
+
+-- Signer
+print('bench: signer')
+if dnssec_ok then
+	require('spec.helper')
+	for _, key in pairs(sample_keys) do
+		bench_signer(set, key)
+	end
 end

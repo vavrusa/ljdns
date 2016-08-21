@@ -81,6 +81,8 @@ dname:labels()
 print(dname:lower())
 -- Checks if dname is a child of parent
 if dname:within('\3com') then print('child of com.') end
+-- Checks if dname is a wildcard
+if dname:wildcard() then print('yes, it is a wildcard') end
 ```
 
 ## RDATA
@@ -294,6 +296,62 @@ answer:qr(true)
 assert(tsig_server:sign(answer))
 -- Verify by client
 assert(tsig_client:verify(answer))
+```
+
+### DNSSEC
+
+The library provides an API to do online signing and verification of records. For that it needs ZSK (zone signing key). You can load private keys from PEM format, and public keys (for verification) from either DNSKEY RDATA or PEM.
+
+```lua
+local dnssec = require('dns.dnssec')
+-- Create key for verification
+local dnskey = dns.rrset(...)
+local key = dnssec.key()
+assert(key:rdata(dnskey:rdata(0)))
+assert(key:can_verify() == true) -- Yes, we have pubkey
+assert(key:can_sign() == false)  -- No, we don't have private key
+-- Alternatively, create key from PEM
+key:algo(dnssec.algo.ecdsa_p256_sha256) -- PEM requires algorithm to be set
+assert(key:pubkey(pem_data))            -- Raw pubkey in PEM format
+
+-- Create key for signing
+local key = dnssec.key()
+key:algo(dnssec.algo.ecdsa_p256_sha256) -- PEM requires algorithm to be set
+key:pubkey(pem_data)                    -- Raw privkey in PEM format
+assert(key:can_sign() == true)          -- Yes
+
+-- Keys have readable properties
+print(key:tag())       -- RFC4034 KeyTag
+print(key:name())      -- Key owner (domain name)
+print(key:flags())     -- Key flags (RFC4034, for checking SEP bit)
+print(key:protocol())  -- Key protocol (RFC4034)
+print(key:algo())      -- Key algorithm (RFC4034, see dnssec.algo table)
+```
+
+For signing and verification, caller needs to create a *signer* associated with a key.
+Signer provides an interface that can work either over raw bytes or RR sets.
+
+```lua
+-- Create signer from key with loaded private key
+assert(key:can_sign() == true)  -- We need a key that can sign
+local signer, err = dnssec.signer(key)
+assert(signer, err)
+-- Signer is associated with the key now, let's sign something
+local rr = dns.rrset('\7example', dns.type.TXT)
+rr:add('DNSSEC is easy', 60)  -- Can't sign empty RR
+local rrsig, err = signer:sign(rr) -- Signer accepts RR, produces RRSIG
+assert(rrsig, err)
+-- The signer uses current time and covered record TTL as default,
+-- but the caller can specify its own inception and expiration time
+-- Sign the record with expiration 1 hour from now
+rrsig = signer:sign(rr, 3600, os.time())
+```
+
+Now that we have signature created, we can verify it using the same key.
+
+```lua
+-- Verify RR against its RRSIG using current ZSK
+assert(signer:verify(rr, rrsig))
 ```
 
 ### Caveats

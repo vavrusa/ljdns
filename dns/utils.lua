@@ -39,6 +39,9 @@ local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
 unsigned mtime(const char *path);
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
+typedef uint8_t knot_rdata_t;
+uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
+uint8_t *knot_rdata_data(const knot_rdata_t *rr);
 ]]
 
 -- Byte order conversions
@@ -89,7 +92,62 @@ local function dnamecmp(lhs, rhs)
 	return cutil.dnamecmp(lhs.bytes, rhs.bytes)
 end
 
+-- Wire writer
+local function wire_tell(w)
+	return w.p + w.len
+end
+local function wire_seek(w, len)
+	assert(w.len + len <= w.maxlen)
+	w.len = w.len + len
+end
+local function wire_write(w, val, len, pt)
+	assert(w.len + len <= w.maxlen)
+	if pt then
+		local p = ffi.cast(pt, w.p + w.len)
+		p[0] = val
+	else
+		ffi.copy(w.p + w.len, val, len)
+	end
+	w.len = w.len + len
+end
+local function write_u8(w, val) return wire_write(w, val, 1, ffi.typeof('uint8_t *')) end
+local function write_u16(w, val) return wire_write(w, n16(val), 2, ffi.typeof('uint16_t *')) end
+local function write_u32(w, val) return wire_write(w, n32(val), 4, ffi.typeof('uint32_t *')) end
+local function write_bytes(w, val, len) return wire_write(w, val, len or #val, nil) end
+local function wire_writer(p, maxlen)
+	return {p=ffi.cast('char *', p), len=0, maxlen=maxlen, u8=write_u8, u16=write_u16, u32=write_u32, bytes=write_bytes, tell=wire_tell, seek=wire_seek}
+end
+utils.wire_writer=wire_writer
+-- Wire reader
+local function wire_read(w, len, pt)
+	assert(w.len + len <= w.maxlen)
+	local ret
+	if pt then
+		local p = ffi.cast(pt, w.p + w.len)
+		ret = p[0]
+	else
+		ret = ffi.string(w.p + w.len, len)
+	end
+	w.len = w.len + len
+	return ret
+end
+local function read_u8(w)  return wire_read(w, 1, ffi.typeof('uint8_t *')) end
+local function read_u16(w) return n16(wire_read(w, 2, ffi.typeof('uint16_t *'))) end
+local function read_u32(w) return n16(wire_read(w, 4, ffi.typeof('uint32_t *'))) end
+local function read_bytes(w, len) return wire_read(w, len) end
+local function wire_reader(p, maxlen)
+	return {p=ffi.cast('char *', p), len=0, maxlen=maxlen, u8=read_u8, u16=read_u16, u32=read_u32, bytes=read_bytes, tell=wire_tell, seek=wire_seek}
+end
+utils.wire_reader=wire_reader
+
 -- Export low level accessors
+utils.rdlen = function (rdata)
+	if type(rdata) == 'string' then return #rdata end
+	return knot.knot_rdata_rdlen(rdata)
+end
+utils.rddata = function (rdata)
+	return knot.knot_rdata_data(rdata)
+end
 utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
 utils.dnamelen = dnamelen

@@ -23,7 +23,6 @@ typedef struct {
 typedef int knot_section_t; /* Do not touch */
 typedef void knot_rrinfo_t; /* Do not touch */
 typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
-typedef uint8_t knot_rdata_t;
 typedef struct knot_rrset {
 	knot_dname_t *raw_owner; /* This is private because GC-unaware */
 	uint16_t raw_type;
@@ -91,8 +90,6 @@ knot_dname_t *knot_dname_copy(const void *name, void /* mm_ctx_t */ *mm);
 int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uint8_t *pkt);
 /* resource records */
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
-uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
-uint8_t *knot_rdata_data(const knot_rdata_t *rr);
 uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
 int knot_rrset_txt_dump(const knot_rrset_t *rrset, char *dst, size_t maxlen, const knot_dump_style_t *style);
@@ -335,6 +332,11 @@ ffi.metatype( knot_dname_t, {
 			assert(ffi.istype(knot_dname_t, dname))
 			if ffi.istype(knot_dname_t, parent) then parent = parent.bytes end
 			return knot.knot_dname_in(ffi.cast(u8_p, parent), dname.bytes)
+		end,
+		wildcard = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
+			return dname.bytes[0] == 1 and dname.bytes[1] == 42 -- '\1*'
 		end,
 		parentof = function(dname, child)
 			assert(ffi.istype(knot_dname_t, child))
