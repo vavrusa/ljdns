@@ -267,10 +267,10 @@ tostring(answer)
 -- Retrieve packet section copy as Lua table
 local records = answer:section(dns.section.ANSWER)
 for i, rr in ipairs(records) do
-	print(rr.owner, rr.ttl, rr.class, rr.type, rr.rdata)
+	print(rr)
 end
 -- Check EDNS OPT RR
-if pkt.opt then
+if pkt.opt ~= nil then
 	local rr = pkt.opt
 	print(dns.edns.version(rr), dns.edns.dobit(rr))
 	-- Check if it contains EDNS OPT code

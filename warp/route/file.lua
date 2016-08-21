@@ -3,6 +3,11 @@ local ffi = require('ffi')
 
 local M = {}
 
+-- Module initialiser
+function M.init(self, conf)
+	return M -- No init
+end
+
 -- Add RR to packet and send it out if it's full
 local function add_rr(req, writer, rr)
 	if not req.answer:put(rr, true) then

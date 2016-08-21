@@ -2,12 +2,16 @@
 local kdns = require('dns')
 local go, utils = require('dns.aio'), require('dns.utils')
 local zonefile = require('warp.route.file')
+local dnssec = require('warp.route.dnssec')
 
 -- TODO: fill this from config
 local config = {
 	bufsize = 4096,
 	route = {
-		{zonefile}
+		{
+			zonefile:init(),
+			dnssec:init { algo = 'ecdsa_p256_sha256' },
+		}
 	}
 }
 
@@ -37,6 +41,7 @@ local function getrequest(sock, addr)
 	req.log, req.vlog = log, vlog
 	req.sock = sock
 	req.addr = addr
+	req.answer, req.authority, req.extra = {}, {}, {}
 	return req
 end
 

@@ -545,7 +545,7 @@ ffi.metatype(ffi.typeof('knot_pktsection_t'), {
 		return function()
 			i = i + 1
 			if i <= n then
-				return i-1, t[i-1]
+				return i-1, t[i-1][0]
 			end
 		end
 	end
