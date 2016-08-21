@@ -6,22 +6,22 @@ downstream {
 }
 
 upstream {
-	['recursive'] = route.dns {
+	recursive = route.dns {
 		address = {'8.8.8.8', '8.8.4.4'},
 		capabilities = '+edns0 +dnssec',
 	},
-	['secure'] = route.dns {
+	secure = route.dns {
 		address = {'185.49.141.38'},
 		capabilities = '+tls +keepalive',
 	},
-	['http'] = route.dns {
+	http = route.dns {
 		address = {'1.2.3.4'},
 		cafile = 'remote.crt',
 	},
-	['localzone'] = route.file {
+	localzone = route.file {
 		path = 'pile',
 	},
-	['lru'] = route.cache {
+	lru = route.cache {
 		backend = 'lmdb',
 		path = '/tmp/cache',
 	}

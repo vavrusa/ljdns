@@ -35,13 +35,13 @@ build = {
     }
   },
   modules = {
-    ["kdns.aio"] = "kdns/aio.lua",
-    ["kdns.rrparser"] = "kdns/rrparser.lua",
-    ["kdns.sift"] = "kdns/sift.lua",
-    ["kdns.utils"] = "kdns/utils.lua",
-    ["kdns.lmdb"] = "kdns/lmdb.lua",
-    ["kdns.tls"] = "kdns/tls.lua",
-    kdns = "kdns.lua",
+    ["dns.aio"] = "dns/aio.lua",
+    ["dns.rrparser"] = "dns/rrparser.lua",
+    ["dns.sift"] = "dns/sift.lua",
+    ["dns.utils"] = "dns/utils.lua",
+    ["dns.lmdb"] = "dns/lmdb.lua",
+    ["dns.tls"] = "dns/tls.lua",
+    dns = "dns.lua",
     kdns_clib = "src/utils.c",
   }
 }

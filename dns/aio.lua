@@ -19,13 +19,13 @@ end
 local S = require('syscall')
 local c, t = S.c, S.t
 local ffi, bit = require('ffi'), require('bit')
-local n16 = require('kdns.utils').n16
+local n16 = require('dns.utils').n16
 local gettime = function()
 	local tv = S.gettimeofday()
 	return (0.000001 * tonumber(tv.tv_usec) + tonumber(tv.tv_sec))
 end
 
-if not table.clear then table.clear = function(t) t = {} end end
+if not table.clear then table.clear = function(t) t = {} end end -- luacheck: ignore
 -- Negotiate buffer sizes
 local bufsize_min = 256 * 1024
 -- No SIGPIPE on broken connections
@@ -142,9 +142,9 @@ local function getsocket(addr, tcp)
 			assert(ok, tostring(err))
 		end
 		-- Negotiate socket buffers for bound sockets to make sure we can get 64K datagrams through
-		ok, err = sock:getsockopt(c.SOL.SOCKET, c.SO.RCVBUF)
+		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.RCVBUF)
 		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.RCVBUF, math.min(ok, bufsize_min)) end
-		ok, err = sock:getsockopt(c.SOL.SOCKET, c.SO.SNDBUF)
+		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.SNDBUF)
 		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.SNDBUF, math.min(ok, bufsize_min)) end
 	end
 	sock:nonblock()
@@ -229,7 +229,7 @@ local function udprecv(sock, buf, buflen, addr)
 	else -- Reuse existing buffer, make sure we don't exceed bounds
 		ret, err, addr = nbrecvfrom(sock, addr, buf, buflen)
 	end
-	return ret, err
+	return ret, err, addr
 end
 local function tcprecv(sock, buf, buflen)
 	local rcvlenbuf = ffi.new('uint16_t [1]')
@@ -261,10 +261,9 @@ local function connect(sock, addr, buf, buflen)
 		local ok, err = sock:sendto(packed_msg, buflen + 2, c.MSG.FASTOPEN, addr)
 		if ok then return ok end
 	end
-	local ok, err = sock:connect(addr)
+	local _, err = sock:connect(addr)
 	if err and err.errno == c.E.INPROGRESS then
 		coroutine.yield(M.writers, sock)
-		ok, err = true, nil
 	end
 	assert(sock:getpeername(), 'failed to connect')
 	if buf then -- Send data after connecting (assume TFO failed)
@@ -332,7 +331,7 @@ end
 
 local function step(timeout)
 	local pollfd, ok, err, count = M.pollfd, true, nil, 0
-	for i, ev in pollfd:get(timeout) do
+	for _, ev in pollfd:get(timeout) do
 		-- Stop listening when error is encountered
 		if pollfd.eof(ev) then
 			if M.writers[ev.fd] then

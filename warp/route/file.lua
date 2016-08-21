@@ -1,4 +1,4 @@
-local kdns, go, rrparser = require('kdns'), require('kdns.aio'), require('kdns.rrparser')
+local dns, go, rrparser = require('dns'), require('dns.aio'), require('dns.rrparser')
 local ffi = require('ffi')
 
 local M = {}
@@ -18,23 +18,23 @@ end
 local function zone_get(name)
 	local zonefile = name:tostring()..'zone'
 	assert(not zonefile:find('/', 1, true) and not zonefile:find('..', 1, true))
-	local mtime = kdns.utils.mtime(zonefile)
-	for i = 2, name:labels() do
+	local mtime = dns.utils.mtime(zonefile)
+	for _ = 2, name:labels() do
 		if mtime > 0 then break end
 		local next_label = zonefile:find('.', 1, true)
 		zonefile = zonefile:sub(next_label + 1)
-		mtime = kdns.utils.mtime(zonefile)
+		mtime = dns.utils.mtime(zonefile)
 	end
 	return zonefile, mtime
 end
 
 -- Check if we have a valid zonefile
-local function accept(req)
+local function accept(self, req)
 	local name = req.query:qname()
 	local zonefile, mtime = zone_get(name)
 	if mtime == 0 then
 		req:vlog('%s: refused (no zone found)', name)
-		req.answer:rcode(kdns.rcode.REFUSED)
+		req.answer:rcode(dns.rcode.REFUSED)
 		return false
 	else
 		req.file_path = zonefile
@@ -44,17 +44,18 @@ local function accept(req)
 end
 
 -- Answer query from zonefile
-local function serve(req, writer)
+local function serve(self, req, writer)
 	local tstart = go.now()
 	local name = req.query:qname()
 	-- Note: rrset is going to contain unsafe owner to avoid allocation on every RR (expensive)
 	--       we use custom GC routine to not attempt to free unsafe owner
 	if not req.file_parser then req.file_parser = assert(rrparser.new()) end
-	if not req.rr then req.file_rr = ffi.gc(kdns.rrset(nil, 0), kdns.rrset.clear) end
+	if not req.rr then req.file_rr = ffi.gc(dns.rrset(nil, 0), dns.rrset.clear) end
 	req.answer:aa(true)
+	req.answer:rd(false)
 	-- Start streaming zone
 	local parser, rr = req.file_parser, req.file_rr
-	rr.raw_owner = kdns.todname(parser.r_owner)
+	rr.raw_owner = dns.todname(parser.r_owner)
 	local found, soa, nrrs, npkts, qtype = false, nil, 0, 0, req.query:qtype()
 	req:vlog('%s: stream start (mtime %d)', req.file_path, req.file_mtime)
 	assert(parser:open(req.file_path))
@@ -79,7 +80,7 @@ local function serve(req, writer)
 			rr:clear()
 		end
 		-- Keep SOA handy for later
-		if not soa and rr:type() == kdns.type.SOA then
+		if not soa and rr:type() == dns.type.SOA then
 			soa = rr:copy()
 			soa:add(parser.r_data, parser.r_ttl, parser.r_data_length)
 		end
@@ -87,11 +88,10 @@ local function serve(req, writer)
 	parser:reset()
 	-- Add final SOA or SOA non-existence proof
 	if soa then
-		if not found and not xfer then
-			req.answer:aa(false)
-			req.answer:begin(kdns.section.AUTHORITY)
+		if not found and not req.xfer then
+			req.answer:begin(dns.section.AUTHORITY)
 		end
-		if not found or xfer then
+		if not found or req.xfer then
 			add_rr(req, writer, soa)
 		end
 	end

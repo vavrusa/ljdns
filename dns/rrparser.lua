@@ -1,10 +1,10 @@
--- LuaJIT ffi bindings for zscanner, a DNS zone parser.
--- Author: Marek Vavrusa <marek.vavrusa@nic.cz>
---
+-- LuaJIT FFI bindings for zscanner, a DNS zone parser.
+-- Author: Marek Vavrusa <marek@vavrusa.com>
 
 local ffi = require('ffi')
-local utils = require('kdns.utils')
-local libzscanner = ffi.load(utils.dll_versioned('libzscanner', '1'))
+local utils = require('dns.utils')
+local libzscanner = utils.clib('libzscanner', {1})
+
 ffi.cdef[[
 void free(void *ptr);
 void *realloc(void *ptr, size_t size);
@@ -127,7 +127,7 @@ local zs_state = ffi.new('struct zs_state')
 
 -- Sorted set of records
 local bsearch = utils.bsearch
-sortedset_t = ffi.typeof('struct { knot_rrset_t *at; int32_t len; int32_t cap; }')
+local sortedset_t = ffi.typeof('struct { knot_rrset_t *at; int32_t len; int32_t cap; }')
 ffi.metatype(sortedset_t, {
 	__gc = function (set)
 		for i = 0, tonumber(set.len) - 1 do set.at[i]:init(nil, 0) end

@@ -9,8 +9,8 @@
 -- $ echo -e "@ 3600 IN NS ns1\nns1 3600 IN A 1.2.3.4" >> pile/example.zone
 -- $ namepile.lua -v pile @127.0.0.1#4242 &
 -- $ dig.lua AXFR @127.0.0.1#4242 example.
-local kdns, rrparser = require('kdns'), require('kdns.rrparser')
-local go, utils = require('kdns.aio'), require('kdns.utils')
+local kdns, rrparser = require('dns'), require('dns.rrparser')
+local go, utils = require('dns.aio'), require('dns.utils')
 local ffi = require('ffi')
 local vlog = function () end
 local function log(level, addr, msg, ...)
@@ -113,7 +113,6 @@ for k,v in next,arg,0 do
 			end
 		end)
 	elseif v == '-v' then
-		verbose = true
 		vlog = function (...) return log('info', ...) end
 	else
 		local ok, err = utils.chdir(v..'/')

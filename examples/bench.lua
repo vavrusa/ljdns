@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
-local kdns = require('kdns')
-local sift, utils = require('kdns.sift'), require('kdns.utils')
-local aio = require('kdns.aio')
+local kdns = require('dns')
+local sift, utils = require('dns.sift'), require('dns.utils')
+local aio = require('dns.aio')
 local lmdb_ok, lmdb = pcall(require, 'kdns.lmdb')
 
 local function bench_sift(backend)
@@ -44,7 +44,7 @@ local function bench_lmdb(env, db, step)
 	local queries = {}
 	local countdown = 0
 	local cur = txn:cursor()
-	for i,v in ipairs(cur) do
+	for i,_ in ipairs(cur) do
 		if countdown == 0 then
 			table.insert(queries, lmdb.val_t(i.size, i.data))
 			countdown = step

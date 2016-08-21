@@ -1,6 +1,6 @@
 local ffi = require('ffi')
-local kdns = require('kdns')
-local utils, rrparser = require('kdns.utils'), require('kdns.rrparser')
+local kdns = require('dns')
+local utils, rrparser = require('dns.utils'), require('dns.rrparser')
 local sift = {}
 
 -- Compile query string/table into filter function
@@ -10,7 +10,7 @@ local sift = {}
 local function makefilter(query)
 	if type(query) == 'string' then query = {query} end
 	local filters, farg = {}, {}
-	for i,t in ipairs(query) do
+	for _,t in ipairs(query) do
 		local k,op,v = t:match('(%w+)([~!=><]+)(%S+)')
 		if not v then
 			local tstr = t:match('%w+')
@@ -41,7 +41,7 @@ local function makefilter(query)
 			end
 			owner = kdns.dname.parse(owner)
 			-- TODO(marek): fuzzy search with N allowed edit distance
-			fuzzy = tonumber(fuzzy)
+			-- fuzzy = tonumber(fuzzy)
 			table.insert(farg, owner)
 			table.insert(filters, string.format('(%sargs[%d]:%s(owner))', opref, #farg, meta))
 		elseif k == 'ttl' then
@@ -76,9 +76,7 @@ local function makefilter(query)
 		return nil, string.format('bad filter function "%s"', fdecl)
 	end
 	-- Clear temporary data and return closure
-	fdecl = nil
-	filters = nil
-	query = nil
+	fdecl, filters, query = nil, nil, nil -- luacheck: ignore
 	return function(owner, rtype, ttl, rdata)
 		return filter(owner, rtype, ttl, rdata, farg)
 	end

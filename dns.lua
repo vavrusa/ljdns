@@ -3,8 +3,8 @@
 local ffi = require('ffi')
 local bit = require('bit')
 local math = require('math')
-local utils = require('kdns.utils')
-local knot = ffi.load(utils.dll_versioned('libknot', '2'))
+local utils = require('dns.utils')
+local knot = utils.clib('libknot', {2,3})
 ffi.cdef[[
 /*
  * Data structures
@@ -349,7 +349,7 @@ ffi.metatype( knot_dname_t, {
 })
 
 -- RDATA parser
-local rrparser = require('kdns.rrparser')
+local rrparser = require('dns.rrparser')
 local function rd_parse (rdata_str)
 	local parser = rrparser.new()
 	if parser:parse('. 0 IN '..rdata_str..'\n') then
@@ -483,7 +483,7 @@ ffi.metatype( knot_rrset_t, {
 		tostring = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
 			if rr:count() > 0 then
-				local ret = -1
+				local ret
 				if i then
 					ret = knot.knot_rrset_txt_dump_data(rr, i, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				else

@@ -13,6 +13,14 @@ function utils.dll_versioned(lib, ver)
 	return string.format(fmt[jit.os], lib, ver)
 end
 
+-- Return versioned C library
+function utils.clib(soname, versions)
+	for _, v in pairs(versions) do
+		local ok, lib = pcall(ffi.load, utils.dll_versioned(soname, tostring(v)))
+		if ok then return lib end
+	end
+end
+
 -- Hexdump from http://lua-users.org/wiki/HexDump
 function utils.hexdump(buf)
 	if buf == nil then return nil end
@@ -26,7 +34,7 @@ function utils.hexdump(buf)
 end
 
 -- FFI + C code
-local libknot = ffi.load(utils.dll_versioned('libknot', '2'))
+local knot = utils.clib('libknot', {2,3})
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
 unsigned mtime(const char *path);
@@ -47,8 +55,8 @@ local rshift,band = bit.rshift,bit.band
 -- Compute RDATA set length
 local function rdsetlen(rr)
 	local len = 0
-	for i = 1,rr.rdcount do
-		len = len + (libknot.knot_rdata_rdlen(rr.raw_data + len) + 4)
+	for _ = 1,rr.rdcount do
+		len = len + (knot.knot_rdata_rdlen(rr.raw_data + len) + 4)
 	end
 	return len
 end
@@ -57,8 +65,8 @@ end
 local function rdsetget(rr, n)
 	assert(n < rr.rdcount)
 	local p = rr.raw_data
-	for i = 1,n do
-		p = p + (libknot.knot_rdata_rdlen(p) + 4)
+	for _ = 1,n do
+		p = p + (knot.knot_rdata_rdlen(p) + 4)
 	end
 	return p
 end
@@ -93,7 +101,7 @@ utils.mtime = cutil.mtime
 -- Sort FFI array (0-indexed) using bottom-up heapsort based on GSL-shell [1]
 -- Selection-based sorts work better for this workload, as swaps are more expensive
 -- [1]: https://github.com/franko/gsl-shell
-function utils.sort(array, len)
+function utils.sort(array, size)
 	local elmsize = ffi.sizeof(array[0])
 	local buf = ffi.new('char [?]', elmsize)
 	local tmpval = ffi.cast(ffi.typeof(array[0]), buf)
@@ -124,12 +132,12 @@ function utils.sort(array, len)
 	end
 
 	-- Heapify and sort by sifting heap top
-	for i = rshift(len - 2, 1), 0, -1 do
+	for i = rshift(size - 2, 1), 0, -1 do
 		ffi.copy(tmpval, array + i, elmsize)
-		sift(i, len, nil)
+		sift(i, size, nil)
 	end
 	-- Sort heap
-	for i = len - 1, 1, -1 do
+	for i = size - 1, 1, -1 do
 		ffi.copy(tmpval, array + i, elmsize)
 		ffi.copy(array + i, array, elmsize)
 		sift(0, i, nil)
@@ -140,7 +148,7 @@ local function bsearch(array, len, owner, steps)
 	-- Number of steps is specialized, this allows unrolling
 	if not steps then steps = math.log(len, 2) end
 	local low = 0
-	for i = 1, steps do
+	for _ = 1, steps do
 		len = rshift(len, 1)
 		local r1 = dnamecmp(array[low + len]:owner(), owner)
 		if     r1  < 0 then low = low + len + 1

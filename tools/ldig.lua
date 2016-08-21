@@ -1,11 +1,11 @@
 #!/usr/bin/env luajit
-local kdns = require('kdns')
+local kdns = require('dns')
 -- Parse parameters
 local host, port, tcp, tls, xfer, key = nil, 53, false, false, false, nil
 local version, dobit, bufsize, short, multi = 0, false, nil, false
 local qname, qtype, qclass = '.', kdns.type.NS, kdns.class.IN
 local flags = {'rd'}
-k = 1 while k <= #arg do
+local k = 1 while k <= #arg do
 	local v = arg[k]
 	local chr = string.char(v:byte())
 	if chr == '@' then host = v:sub(2)
@@ -100,7 +100,7 @@ else
 end
 for _,q in ipairs(planned) do
 	local query = kdns.packet(512)
-	for i,flag in ipairs(flags) do query[flag](query, true) end
+	for _,flag in ipairs(flags) do query[flag](query, true) end
 	query:question(kdns.dname.parse(q[1]), q[2], q[3])
 	if dobit or (bufsize ~= nil and bufsize > 0) then
 		if bufsize == nil then bufsize = 4096 end
@@ -116,7 +116,7 @@ for _,q in ipairs(planned) do
 end
 
 -- Send and wait for answers
-local go = require('kdns.aio')
+local go = require('dns.aio')
 local addr, started = go.addr(host, port), go.now()
 local send, recv = go.udpsend, go.udprecv
 if tcp then send, recv = go.tcpsend, go.tcprecv end
@@ -128,13 +128,13 @@ assert(go(function()
 	else -- Make connected socket and send query
 		go.connect(sock, addr)
 		if tls then -- Upgrade to TLS
-			sock = assert(require('kdns.tls').client(sock, 'x509'))
+			sock = assert(require('dns.tls').client(sock, 'x509'))
 		end
 		send(sock, queries[1]:towire())
 	end
 	for i=2,#queries do send(sock, queries[i]:towire()) end
 	-- Start receiving answers
-	for i=1,#queries do
+	for _=1,#queries do
 	local answer = kdns.packet(65535)
 	local rcvd = recv(sock, answer.wire, answer.max_size)
 	local nbytes, npkts, tsig_ok, soa = 0, 0, true, nil

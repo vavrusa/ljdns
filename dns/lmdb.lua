@@ -383,7 +383,7 @@ function M.open(path, flags, size, mode, maxdbs)
     if ret ~= 0 then return mdb_error(ret) end
     env = mdb_env_t(env[0])
     if maxdbs then
-        ret = lmdb.mdb_env_set_maxdbs(env.env, max_dbs)
+        ret = lmdb.mdb_env_set_maxdbs(env.env, maxdbs)
         if ret ~= 0 then return mdb_error(ret) end
     end
     ret = lmdb.mdb_env_set_mapsize(env.env, size)

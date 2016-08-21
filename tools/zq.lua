@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
-local kdns = require('kdns')
-local sift = require('kdns.sift')
-local utils = require('kdns.utils')
+local kdns = require('dns')
+local sift = require('dns.sift')
+local utils = require('dns.utils')
 -- Parameters
 local function help()
 	print(string.format('Usage: %s [options] [filter] [filter2] ... zonefile', arg[0]))
@@ -24,7 +24,7 @@ end
 if #arg < 1 then help() return 1 end
 local zone, format, timeit, sort, limit, query = nil, 'text', false, false, nil, {}
 local filters, farg = {}, {}
-k = 1 while k <= #arg do
+local k = 1 while k <= #arg do
 	local v = arg[k]
 	if v == '-h' or v == '--help' then return help()
 	elseif v == '-t' then timeit = true

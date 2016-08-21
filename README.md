@@ -22,38 +22,38 @@ The library provides several utilities for convenience, see [tools/README.md](to
 
 ## Constants
 
-There are numeric constants for DNS classes, types, opcodes and rcodes. Since they're constants, LuaJIT can inline them. You can convert them back to the text representation with `kdns.tostring`.
+There are numeric constants for DNS classes, types, opcodes and rcodes. Since they're constants, LuaJIT can inline them. You can convert them back to the text representation with `dns.tostring`.
 
 ```lua
 -- Get constant numeric value
-local opcode = kdns.opcode.QUERY -- 0
+local opcode = dns.opcode.QUERY -- 0
 -- Convert constant back to string
-local name = kdns.tostring.opcode[opcode] -- "QUERY"
+local name = dns.tostring.opcode[opcode] -- "QUERY"
 -- Convert back to number
-opcode = kdns.opcode[name] -- 0
+opcode = dns.opcode[name] -- 0
 -- Examples of all constant tables
-print(kdns.class.IN)
-print(kdns.type.AAAA)
-print(kdns.opcode.IQUERY)
-print(kdns.rcode.NXDOMAIN)
-print(kdns.section.ANSWER)
+print(dns.class.IN)
+print(dns.type.AAAA)
+print(dns.opcode.IQUERY)
+print(dns.rcode.NXDOMAIN)
+print(dns.section.ANSWER)
 ```
 
 ## RR types
 
-Record types are declared as numeric constants in `kdns.type` table. There are symbolic constants for all used RR types as of today (not deprecated). For unknown/custom types, simply use their numeric value.
+Record types are declared as numeric constants in `dns.type` table. There are symbolic constants for all used RR types as of today (not deprecated). For unknown/custom types, simply use their numeric value.
 
 ```lua
 -- Returns 2 (number of NS type)
-print(kdns.type.NS)
+print(dns.type.NS)
 -- Compare as simple numbers
-if qtype == kdns.type.AAAA then print('is AAAA question') end
+if qtype == dns.type.AAAA then print('is AAAA question') end
 -- Constants are numbers, they don't have implicit tostring() conversion
--- Use kdns.tostring table to convert constants to text format
-print(kdns.tostring.type[2]) -- "NS"
-print(kdns.tostring.type[1]) -- "A"
+-- Use dns.tostring table to convert constants to text format
+print(dns.tostring.type[2]) -- "NS"
+print(dns.tostring.type[1]) -- "A"
 -- Convert custom type to string
-print(kdns.tostring.type[55555]) -- "TYPE55555"
+print(dns.tostring.type[55555]) -- "TYPE55555"
 ```
 
 ## Domain names
@@ -63,11 +63,11 @@ The library supports conversion between textual representation and wire format.
 
 ```lua
 -- Read from wire format
-local dname = kdns.dname('\7example\3com')
+local dname = dns.dname('\7example\3com')
 -- Convert back to string using tostring()
 assert(tostring(dname) == 'example.com.')
 -- Read from textual representation 
-dname = kdns.dname.parse('example.COM')
+dname = dns.dname.parse('example.COM')
 -- Interpret as wire format
 assert(dname == '\7example\3COM')
 ```
@@ -89,25 +89,25 @@ RDATA is stored as a simple binary string, the library contains a few helper fun
 
 ```lua
 -- Convenience for A RDATA (IPv4 address)
-local rd_a = kdns.rdata.a('1.2.3.4')
+local rd_a = dns.rdata.a('1.2.3.4')
 -- RDATA is a LuaJIT string with a fixed length
 assert(rd_a == '\1\2\3\4')
 assert(#rd_a == 4)
 -- Convenience for MX record
-assert(kdns.rdata.mx('10 test') == '\0\10\4test\0')
+assert(dns.rdata.mx('10 test') == '\0\10\4test\0')
 -- Convenience for TXT record
-assert(kdns.rdata.txt('abcd') == '\4abcd')
+assert(dns.rdata.txt('abcd') == '\4abcd')
 ```
 
 The rest of the types can be parsed with generic interface.
 
 ```lua
 -- Parse LOC type
-kdns.rdata.parse('LOC 52 22 23.000 N 4 53 32.000 E -2.00m 0.00m 10000m 10m')
+dns.rdata.parse('LOC 52 22 23.000 N 4 53 32.000 E -2.00m 0.00m 10000m 10m')
 -- Parse SRV record
-kdns.rdata.parse('SRV 0 5 5060 sipserver.example.com.')
+dns.rdata.parse('SRV 0 5 5060 sipserver.example.com.')
 -- nil is returned on invalid text format
-assert(kdns.rdata.parse('SRV 0 5 zzzz') == nil)
+assert(dns.rdata.parse('SRV 0 5 zzzz') == nil)
 ```
 
 RDATA wire format loses information about its type during transformation, it needs to be first inserted to RR set for wire to text conversion, read on how to print it.
@@ -120,23 +120,23 @@ There are several dissectors available for RDATA.
 * SOA RDATA dissectors
 
 ```lua
-local rata = kdns.rdata.parse('SOA a.ns. nobody. 2016000000 1800 900 604800 86400')
-print(kdns.rdata.soa_primary_ns(rdata)) -- 'a.ns.'
-print(kdns.rdata.soa_mailbox(rdata))    -- 'nobody.'
-print(kdns.rdata.serial(rdata))         -- 2016000000
+local rata = dns.rdata.parse('SOA a.ns. nobody. 2016000000 1800 900 604800 86400')
+print(dns.rdata.soa_primary_ns(rdata)) -- 'a.ns.'
+print(dns.rdata.soa_mailbox(rdata))    -- 'nobody.'
+print(dns.rdata.serial(rdata))         -- 2016000000
 ```
 
 Adding new dissectors is easy thanks to duck-typing in Lua.
 
 ```lua
 -- Install new dissector
-kdns.rdata.cname_target = function (rdata)
+dns.rdata.cname_target = function (rdata)
 	rdata = ffi.cast('char *', rdata)
-	return kdns.dname(rdata, utils.dnamelenraw(rdata))
+	return dns.dname(rdata, utils.dnamelenraw(rdata))
 end
 -- Dissect CNAME target
-local rdata = kdns.rdata.parse('CNAME next-name.')
-print(kdns.rdata.cname_target(rdata))   -- 'next-name.'
+local rdata = dns.rdata.parse('CNAME next-name.')
+print(dns.rdata.cname_target(rdata))   -- 'next-name.'
 ```
 
 ## RR sets
@@ -146,7 +146,7 @@ RR set is a set of RDATA with a common `owner`, `type`, `class`. As there is no 
 ```lua
 -- Construct RR set of 'com.' and type NS (IN class is implicit)
 -- Owner is a domain name in wire format
-local rr = kdns.rrset('\3com', kdns.type.NS)
+local rr = dns.rrset('\3com', dns.type.NS)
 -- RR set has owner, type, class
 print(rr:owner(), rr:type(), rr:class())
 -- It can be converted back to string
@@ -160,7 +160,7 @@ use RDATA constructors to make sure it is valid. RDATA in set are indexed from `
 
 ```lua
 -- Insert RDATA to NS RR set, second optional argument is TTL
-rr:add(kdns.rdata.ns('ns1.com'), 3600)
+rr:add(dns.rdata.ns('ns1.com'), 3600)
 -- First record defines RR set default TTL (0 if empty)
 rr:ttl() -- 3600
 -- You can insert RDATA in wire format, TTL is reused from first entry if nil
@@ -188,16 +188,16 @@ DNS messages are defined in [RFC 1035, section 4. MESSAGES](http://tools.ietf.or
 
 ```lua
 -- Create an empty packet of 512B with pseudo-random ID
-local pkt = kdns.packet(512)
+local pkt = dns.packet(512)
 -- Get message ID (returns number)
 print(pkt:id())
 -- Set message ID (accepts number, returns number)
 assert(pkt:id(1234) == 1234)
 -- Set OPCODE
-pkt:opcode(kdns.opcode.QUERY)
+pkt:opcode(dns.opcode.QUERY)
 assert(pkt:opcode() == 0)
 -- Set RCODE
-pkt:rcode(kdns.rcode.NOERROR)
+pkt:rcode(dns.rcode.NOERROR)
 assert(pkt:rcode() == 0)
 -- Get AA flag value
 print(pkt:aa())
@@ -208,25 +208,25 @@ for _, flag in pairs({'rd', 'tc', 'aa', 'qr', 'cd', 'ad', 'ra'}) do
 	print(flag, pkt[flag](pkt))
 end
 -- Set packet question (return 0 on success)
-pkt:question('\2cz', kdns.type.SOA)
+pkt:question('\2cz', dns.type.SOA)
 ```
 
 Packets are treated as bytestreams, record are organized in sections which must be written in order. This means that once an authority section is written, it's **not** possible to go back and write more records in answer section. If you need to write records out of order, keep them in a separate tables until finalization.
 
 ```lua
--- Section codes are in kdns.section table {ANSWER, AUTHORITY, ADDITIONAL}
-pkt:begin(kdns.section.ANSWER)
+-- Section codes are in dns.section table {ANSWER, AUTHORITY, ADDITIONAL}
+pkt:begin(dns.section.ANSWER)
 -- Put RR in this answer (shortened method)
-pkt:put(kdns.rrset('\2cz', kdns.type.A):add(kdns.rdata.a('1.2.3.4'), 3600))
+pkt:put(dns.rrset('\2cz', dns.type.A):add(dns.rdata.a('1.2.3.4'), 3600))
 -- Verify RR count
 assert(pkt:ancount() == 1)
 -- End answer, begin authority
-pkt:begin(kdns.section.AUTHORITY)
-local ns = kdns.rrset('\2cz', kdns.type.NS)
+pkt:begin(dns.section.AUTHORITY)
+local ns = dns.rrset('\2cz', dns.type.NS)
 ns:add('\3ns1\2cz\0', 3600)
 pkt:put(ns)
 -- Attempt to write to answer again
-pkt:begin(kdns.section.ANSWER) -- WRONG, throws error
+pkt:begin(dns.section.ANSWER) -- WRONG, throws error
 -- Finalize to Lua binary string
 local wire = pkt:towire()
 ```
@@ -237,13 +237,13 @@ The EDNS OPT is a special type of RR, because it uses its fields for a different
 
 ```lua
 -- Create OPT RR (optional version, payload)
-local opt = kdns.edns.rrset(0, 4096)
+local opt = dns.edns.rrset(0, 4096)
 -- Set "DNSSEC OK"
-kdns.edns.dobit(opt, true)
+dns.edns.dobit(opt, true)
 -- Add EDNS option (numeric code, binary string of data)
-kdns.edns.option(opt, 0x5, 'mydata')
+dns.edns.option(opt, 0x5, 'mydata')
 -- Enter ADDITIONAL section, the OPT must be last in the packet
-pkt:begin(kdns.section.ADDITIONAL)
+pkt:begin(dns.section.ADDITIONAL)
 -- Write as any other packet
 pkt:put(opt)
 print(tostring(pkt))
@@ -253,7 +253,7 @@ As it's an API over binary string, it can be used for parsing packet from wire f
 
 ```lua
 -- Create packet over existing wire, it will not be allocated
-local answer = kdns.packet(#wire, wire)
+local answer = dns.packet(#wire, wire)
 -- Packet parser returns true|false depending on the result
 if answer:parse() then print('success!') end
 -- Set QR bit to signify answer
@@ -263,16 +263,16 @@ if answer:answers(pkt) then print('indeed') end
 -- Write out the packet in text format (same as ISC dig)
 tostring(answer)
 -- Retrieve packet section copy as Lua table
-local records = answer:section(kdns.section.ANSWER)
+local records = answer:section(dns.section.ANSWER)
 for i, rr in ipairs(records) do
 	print(rr.owner, rr.ttl, rr.class, rr.type, rr.rdata)
 end
 -- Check EDNS OPT RR
 if pkt.opt then
 	local rr = pkt.opt
-	print(kdns.edns.version(rr), kdns.edns.dobit(rr))
+	print(dns.edns.version(rr), dns.edns.dobit(rr))
 	-- Check if it contains EDNS OPT code
-	if kdns.edns.option(rr, 0x05) then print('yes, has 0x5 option') end
+	if dns.edns.option(rr, 0x05) then print('yes, has 0x5 option') end
 end
 ```
 
@@ -282,7 +282,7 @@ TSIG is not a property of packet but a pairing of TSIG key with a signer state. 
 
 ```lua
 -- Create TSIG signer from string, same format as ISC dig
-local tsig_client = kdns.tsig('keyname:hmac-md5:Wg==')
+local tsig_client = dns.tsig('keyname:hmac-md5:Wg==')
 local tsig_server = tsig_client:copy()
 -- Sign packet, TSIG remembers 'last signed' and query digest
 assert(tsig_client:sign(pkt))
@@ -302,17 +302,17 @@ There is a caveat with packet parsing, as LuaJIT [doesn't GC cdata](http://luaji
 
 ```lua
 -- WRONG, this will GC the wire while it's being read
-local pkt = kdns.packet(12, '\0\0\0\0\0\0\0\0\0\0\0\0')
+local pkt = dns.packet(12, '\0\0\0\0\0\0\0\0\0\0\0\0')
 
 -- RIGHT, reference to wire is kept during the pkt lifetime
 local wire = '\0\0\0\0\0\0\0\0\0\0\0\0'
-local pkt = kdns.packet(#wire, wire)
+local pkt = dns.packet(#wire, wire)
 ```
 
 Library also provides hexdump of binary string for debugging purposes or bisection.
 
 ```lua
-> kdns.hexdump(pkt:towire())
+> dns.hexdump(pkt:towire())
 00000000  04 D2 03 30 00 01 00 01 00 00 00 01 04 74 65 73  .?.0.........tes
 00000010  74 00 00 06 00 01 03 63 6F 6D 00 00 02 00 01 00  t......com......
 00000020  00 0E 10 00 06 04 74 65 73 74 00 03 63 6F 6D 00  ......test..com.
@@ -327,7 +327,7 @@ If you want to build something resembling a sorted record set or filter it, skip
 You can parse the zone file into a table of records.
 
 ```lua
-local rrparser = require('kdns.rrparser')
+local rrparser = require('dns.rrparser')
 local records = rrparser.parse_file('example.com.zone')
 for i, rr in ipairs(records) do
 	print(rr.owner, rr.type, len(rr.rdata))
@@ -341,10 +341,10 @@ This is much faster for large zones, as it doesn't require you store and copy ev
 local parser = rrparser.new()
 assert(parser:open(zonefile))
 while parser:parse() do
-	print(kdns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
+	print(dns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
 	-- Build a real RRSet
-	local owner = kdns.todname(parser.r_owner, parser.r_owner_length)
-	local rr = kdns.rrset(owner, parser.r_type)
+	local owner = dns.todname(parser.r_owner, parser.r_owner_length)
+	local rr = dns.rrset(owner, parser.r_type)
 	rrset:add(ffi.string(parser.r_data, parser.r_data_length), parser.r_ttl)
 end
 ```
@@ -355,7 +355,7 @@ The same interface can be also used for parsing zones from strings.
 local parser = rrparser.new()
 local ok, err = parser:parse('foo. 3600 IN A 1.2.3.4\n')
 if ok then
-	print(kdns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
+	print(dns.todname(parser.r_owner, parser.r_owner_length), parser.r_type, parser.r_data_length)
 else
 	print(err)
 end
@@ -370,7 +370,7 @@ set of RR sets, i.e. a *"zone"*.
 The results can be either captured in [LMDB][lmdb] on-disk, as a sorted set in memory, printed out, converted to JSON, or passed to caller-provided closure for any other custom processing.
 
 ```lua
-local sift = require('kdns.sift')
+local sift = require('dns.sift')
 -- Print records in the zone
 sift.zone(zone, sift.printer())
 -- Load text zone into JSON
@@ -393,7 +393,7 @@ Note that the set is sorted in terms of [RFC4034](https://tools.ietf.org/html/rf
 set:sort()
 -- Search a name, the result is a lesser or equal RR
 -- This allows searching for exact match or predecessor
-local query = kdns.dname('\5query\3com')
+local query = dns.dname('\5query\3com')
 local rr = set:search(query)
 if rr and query:equals(rr:owner()) then
 	print('result:', rr)
@@ -414,7 +414,7 @@ composed of domain name and type, to raw record data stored as `{u32 ttl, u8 ttl
 -- Start a read transaction and read a key
 local txn = assert(set:txn(db, 'rdonly'))
 -- Convert to search key
-local key, len = utils.searchkey('\5query\3com', kdns.type.AAAA)
+local key, len = utils.searchkey('\5query\3com', dns.type.AAAA)
 -- Retrieve stored value
 local value = txn:get(lmdb.val_t(len, key))
 -- Deserialize (example)
@@ -546,7 +546,7 @@ The asynchronous I/O is based on [ljsyscall][ljsyscall] and uses `epoll/kqueue` 
 You can create coroutines, very much like in Go language.
 
 ```lua
-local go = kdns.aio
+local go = dns.aio
 go(function ()
 	print('Hi from Alice!')
 end)
@@ -567,11 +567,11 @@ assert(go.step(1)) -- Only one step with 1s timeout
 
 ### TCP example
 
-When inside coroutines, you can use `kdns.aio` functions instead of socket meta methods.
+When inside coroutines, you can use `dns.aio` functions instead of socket meta methods.
 Let's make a listener and a client and make them exchange messages.
 
 ```lua
-local go = kdns.aio
+local go = dns.aio
 local addr = go.addr('127.0.0.1', 0) -- Make address object
 local master = go.socket(addr, true) -- Make bound socket
 assert(go(function ()                -- First coroutine acts as server
@@ -618,12 +618,12 @@ go(function()
 	local client = go.socket('inet')            
 	go.connect(client, go.addr('193.0.14.129'))
 	-- Make root NS question
-	local msg = kdns.packet(64)
-	msg:question('\0', kdns.type.NS)
+	local msg = dns.packet(64)
+	msg:question('\0', dns.type.NS)
 	-- Send DNS message and receive response
 	go.udpsend(client, msg:towire())
 	local msg = assert(go.udprecv(client))
-	print('received', kdns.hexdump(msg))
+	print('received', dns.hexdump(msg))
 end)
 ```
 
@@ -635,12 +635,12 @@ go(function()
 	local addr = go.addr('193.0.14.129')
 	local client = go.socket('inet')
 	-- Make root NS question
-	local msg = kdns.packet(64)
-	msg:question('\0', kdns.type.NS)     
+	local msg = dns.packet(64)
+	msg:question('\0', dns.type.NS)     
 	-- Send DNS message and receive response
 	go.udpsend(client, msg:towire(), nil, addr)
 	local msg, sa = go.udprecv(client)
-	print('received from', sa.addr, sa.port, kdns.hexdump(msg))
+	print('received from', sa.addr, sa.port, dns.hexdump(msg))
 end)
 ```
 
@@ -654,7 +654,7 @@ local udp = go.socket(go.addr('127.0.0.1')) -- Make UDP server socket
 -- Writer
 local function serve(sock, msg, saddr)
 	-- Parse and flip QR=1
-	local pkt = kdns.packet(#msg, msg)
+	local pkt = dns.packet(#msg, msg)
 	assert(pkt:parse())
 	pkt:qr(true)
 	-- Send the packet back
@@ -692,7 +692,7 @@ Also, a single socket may have only 1 reader and 1 writer at the same time. Use 
 The library supports upgrading TCP connections to [RFC7858][rfc7858] DNS over TLS for both server and client. The `dig.lua` example has demo client-side code with `+tls` option, it supports pipelining with TLS too. Usage is straightforward, each accepted connection must be upgraded to TLS prior its use:
 
 ```lua
-local tls = require('kdns.tls')
+local tls = require('dns.tls')
 -- Open X.509 credentials
 local cred = tls.creds.x509 {
 	certfile = 'test.crt',

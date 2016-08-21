@@ -1,7 +1,15 @@
 #!/usr/bin/env luajit
-local kdns = require('kdns')
-local go, utils = require('kdns.aio'), require('kdns.utils')
-local zonefile = require('hurricane.route.file')
+local kdns = require('dns')
+local go, utils = require('dns.aio'), require('dns.utils')
+local zonefile = require('warp.route.file')
+
+-- TODO: fill this from config
+local config = {
+	bufsize = 4096,
+	route = {
+		{zonefile}
+	}
+}
 
 -- Logging code
 local vlog = function () end
@@ -33,25 +41,39 @@ local function getrequest(sock, addr)
 end
 
 -- Parse message, then answer to client
-local function serve(req, writer, is_tcp)
+local function serve(req, writer)
 	if not req.query:parse() then
 		error('query parse error')
 	end
 	local qtype = req.query:qtype()
 	req.xfer = (qtype == kdns.type.AXFR or qtype == kdns.type.IXFR)
 	req.query:toanswer(req.answer)
+	-- Copy OPT if present in query
+	if req.query.opt ~= nil then
+		local opt = req.query.opt
+		local payload = math.min(kdns.edns.payload(opt), config.bufsize)
+		req.edns = kdns.edns.rrset(0, payload)
+	end
 	-- Do not process transfers over UDP
-	if req.xfer and not is_tcp then
+	if req.xfer and not req.is_tcp then
 		req.answer:tc(true)
-	else -- If found zonefile, stream answer from zone
-		if zonefile.accept(req) then
-			assert(zonefile.serve(req, writer))
+	else
+		for _, r in ipairs(config.route[1]) do
+			if r:accept(req) then
+				assert(r:serve(req, writer))
+			end
 		end
+	end
+	-- Serialize OPT if present
+	if req.edns then
+		req.answer:begin(kdns.section.ADDITIONAL)
+		req.answer:put(req.edns)
+		req.edns = nil
 	end
 	-- Finalize answer and stream it
 	writer(req, req.answer)
 	req.query:clear()
-	req.sock, req.addr = nil, nil
+	req.sock, req.addr, req.is_tcp = nil, nil, nil
 	pool(reqpool, req)
 end
 
@@ -75,7 +97,8 @@ local function read_tcp(sock)
 		-- Spawn off new coroutine for request
 		if queries > 0 then req.sock = sock:dup() end
 		req.query.size = ok
-		ok, err = go(serve, req, writer_tcp, true)
+		req.is_tcp = true
+		ok, err = go(serve, req, writer_tcp)
 		if not ok then req:log('error', err) end
 		queries = queries + 1
 	end

@@ -187,7 +187,7 @@ local M = {
 local function handshake(s)
     gnutls.gnutls_transport_set_int2(s.session[0], s.fd, s.fd)
     gnutls.gnutls_handshake_set_timeout(s.session[0], default.HANDSHAKE_TIMEOUT)
-    ret = gnutls.gnutls_handshake(s.session[0])
+    local ret = gnutls.gnutls_handshake(s.session[0])
     while ret < 0 and gnutls.gnutls_error_is_fatal(ret) == 0 do
         if ret == err.AGAIN then coroutine.yield(nil, s) end
         ret = gnutls.gnutls_handshake(s.session[0])
