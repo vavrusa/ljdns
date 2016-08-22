@@ -37,11 +37,12 @@ local function getrequest(sock, addr)
 	local req = drain(reqpool) or {
 		query = kdns.packet(512),
 		answer = kdns.packet(4096),
+		authority = {},
+		additional = {},
 	}
 	req.log, req.vlog = log, vlog
 	req.sock = sock
 	req.addr = addr
-	req.answer, req.authority, req.extra = {}, {}, {}
 	return req
 end
 
@@ -69,9 +70,13 @@ local function serve(req, writer)
 			end
 		end
 	end
+	-- Add authority and additionals
+	req.answer:begin(kdns.section.AUTHORITY)
+	for _, rr in ipairs(req.authority) do req.answer:put(rr, true) end
+	req.answer:begin(kdns.section.ADDITIONAL)
+	for _, rr in ipairs(req.additional) do req.answer:put(rr, true) end
 	-- Serialize OPT if present
 	if req.edns then
-		req.answer:begin(kdns.section.ADDITIONAL)
 		req.answer:put(req.edns)
 		req.edns = nil
 	end
@@ -79,6 +84,8 @@ local function serve(req, writer)
 	writer(req, req.answer)
 	req.query:clear()
 	req.sock, req.addr, req.is_tcp = nil, nil, nil
+	table.clear(req.authority)
+	table.clear(req.additional)
 	pool(reqpool, req)
 end
 

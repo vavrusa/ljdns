@@ -48,6 +48,15 @@ int dnssec_sign_init(dnssec_sign_ctx_t *ctx);
 int dnssec_sign_add(dnssec_sign_ctx_t *ctx, const dnssec_binary_t *data);
 int dnssec_sign_write(dnssec_sign_ctx_t *ctx, dnssec_binary_t *signature);
 int dnssec_sign_verify(dnssec_sign_ctx_t *ctx, const dnssec_binary_t *signature);
+
+/* bitmap.h */
+typedef void dnssec_nsec_bitmap_t;
+dnssec_nsec_bitmap_t *dnssec_nsec_bitmap_new(void);
+void dnssec_nsec_bitmap_clear(dnssec_nsec_bitmap_t *bitmap);
+void dnssec_nsec_bitmap_free(dnssec_nsec_bitmap_t *bitmap);
+void dnssec_nsec_bitmap_add(dnssec_nsec_bitmap_t *bitmap, uint16_t type);
+size_t dnssec_nsec_bitmap_size(const dnssec_nsec_bitmap_t *bitmap);
+void dnssec_nsec_bitmap_write(const dnssec_nsec_bitmap_t *bitmap, uint8_t *output);
 ]]
 
 -- Helper for error string
@@ -212,12 +221,9 @@ ffi.metatype(signer_t, {
 				tmp_hdr.l = utils.n32(data:ttl())
 				assert(ffi.sizeof(tmp_hdr) == 8) -- Assert sane alignment
 				-- Serialise records RDATA
-				local p = data.raw_data
-				for _ = 1, data.rdcount do
-					local rdlen = utils.rdlen(p)
+				for _, rdata in ipairs(data) do
 					add_data(signer, tmp_hdr, ffi.sizeof(tmp_hdr))
-					add_data(signer, utils.rddata(p), rdlen)
-					p = p + (rdlen + 4)
+					add_data(signer, utils.rddata(rdata), utils.rdlen(rdata))
 				end
 			else
 				return add_data(signer, data, len)
@@ -241,7 +247,7 @@ ffi.metatype(signer_t, {
 				self:reset()
 				-- Add RRSIG header and signer
 				local rrsig_data = rrsig:rdata(0)
-				local w = utils.wire_reader(rrsig_data, utils.rdlen(rrsig_data))
+				local w = utils.wire_reader(rrsig_data, #rrsig_data)
 				self:add(w:bytes(18), 18) -- Add header
 				local signer_len = utils.dnamelenraw(w:tell())
 				self:add(w:bytes(signer_len), signer_len) -- Add signer
@@ -286,6 +292,42 @@ ffi.metatype(signer_t, {
 	}
 })
 M.signer = signer_t
+
+-- Whitelist supported DNS types
+local known_types = {}
+for _, t in pairs(dns.type) do
+	if t < 127 then table.insert(known_types, t) end
+end
+-- NSEC "black lies" denialer
+local tmp_bitmap = ffi.gc(lib.dnssec_nsec_bitmap_new(), lib.dnssec_nsec_bitmap_free)
+M.denial = function (name, rrtype, ttl, nxdomain)
+	local nsec = dns.rrset(name, dns.type.NSEC)
+	local next_name = dns.dname('\1\0' .. name:towire())
+	local next_len = next_name:len()
+	-- Construct NSEC bitmap with all basic types byt requested
+	lib.dnssec_nsec_bitmap_clear(tmp_bitmap)
+	-- NXDOMAIN can contain only NSEC and its RRSIG
+	if nxdomain then
+		lib.dnssec_nsec_bitmap_add(tmp_bitmap, dns.type.NSEC)
+		lib.dnssec_nsec_bitmap_add(tmp_bitmap, dns.type.RRSIG)
+	else -- All supported types up to meta types
+		for _, i in ipairs(known_types) do
+			if i ~= rrtype and i <= 127 then
+				lib.dnssec_nsec_bitmap_add(tmp_bitmap, i)
+			end
+		end
+	end
+	-- Create NSEC RDATA
+	local bit_size = lib.dnssec_nsec_bitmap_size(tmp_bitmap)
+	local rdata = utils.wire_writer(tmp_signbuf, next_len + bit_size)
+	assert(next_len + bit_size < ffi.sizeof(tmp_signbuf))
+	rdata:bytes(next_name.bytes, next_len)
+	lib.dnssec_nsec_bitmap_write(tmp_bitmap, rdata:tell())
+	rdata:seek(bit_size)
+	-- Finalize RRSET
+	nsec:add(rdata.p, ttl or 0, rdata.len)
+	return nsec
+end
 
 -- Extend DNS record dissectors
 dns.rdata.rrsig_signature = function(rdata)

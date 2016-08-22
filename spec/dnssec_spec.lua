@@ -43,4 +43,10 @@ describe('dnssec', function()
 			assert.truthy(signer:verify(rr, rrsig))
 		end)
 	end
+
+	it('does authenticated denial of existence', function ()
+		local owner = dns.dname('\7example')
+		assert.truthy(dnssec.denial(owner, dns.type.A))
+		assert.truthy(dnssec.denial(owner, dns.type.A, true))
+	end)
 end)

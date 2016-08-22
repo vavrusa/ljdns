@@ -78,6 +78,7 @@ void *malloc(size_t len);
 void free(void *ptr);
 int memcmp(const void *a, const void *b, size_t len);
 /* descriptors */
+const char *knot_strerror(int code);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
 /* domain names */
 int knot_dname_lf(uint8_t *dst, uint8_t *src, const uint8_t *pkt);
@@ -342,6 +343,11 @@ ffi.metatype( knot_dname_t, {
 			assert(ffi.istype(knot_dname_t, child))
 			return child:within(dname)
 		end,
+		towire = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
+			return ffi.string(dname.bytes, dname:len())
+		end,
 		tostring = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
 			assert(dname.bytes ~= nil)
@@ -385,6 +391,13 @@ local rdata = {
 		rdata = rdata + utils.dnamelenraw(rdata) -- Mailbox
 		return utils.n32(ffi.cast(u32_p, rdata)[0])
 	end,
+	soa_minttl = function(rdata)
+		rdata = ffi.cast(u8_p, rdata)
+		rdata = rdata + utils.dnamelenraw(rdata) -- Primary NS
+		rdata = rdata + utils.dnamelenraw(rdata) -- Mailbox
+		rdata = rdata + 4 * ffi.sizeof('uint32_t')
+		return utils.n32(ffi.cast(u32_p, rdata)[0])
+	end,
 }
 
 -- Metatype for RR set
@@ -407,6 +420,9 @@ ffi.metatype( knot_rrset_t, {
 	__tostring = function(rr)
 		return rr:tostring()
 	end,
+	__ipairs = function (self)
+		return utils.rdataiter, self, {-1,self.raw_data}
+	end,
 	__index = {
 		lt = function (a, b)
 			assert(ffi.istype(knot_rrset_t, a))
@@ -414,6 +430,11 @@ ffi.metatype( knot_rrset_t, {
 			local ret = utils.dnamecmp(a:owner(), b:owner())
 			if ret == 0 then ret = a:type() - b:type() end
 			return ret < 0
+		end,
+		equals = function (a, b)
+			assert(ffi.istype(knot_rrset_t, a))
+			assert(ffi.istype(knot_rrset_t, b))
+			return a:type() == b:type() and a:owner():equals(b:owner())
 		end,
 		owner = function(rr) return rr.raw_owner[0] end,
 		type = function(rr) return rr.raw_type end,
@@ -474,6 +495,14 @@ ffi.metatype( knot_rrset_t, {
 			end
 			return copy
 		end,
+		merge = function (rr, next)
+			assert(ffi.istype(knot_rrset_t, rr))
+			assert(ffi.istype(knot_rrset_t, next))
+			for _, rdata in ipairs(next) do
+				local rdlen = knot.knot_rdata_rdlen(rdata)
+				assert(rr:add(knot.knot_rdata_data(rdata), rr:ttl(), rdlen))
+			end
+		end,
 		clear = function (rr)
 			assert(ffi.istype(knot_rrset_t, rr))
 			if rr.rdcount > 0 then
@@ -492,12 +521,12 @@ ffi.metatype( knot_rrset_t, {
 					if rr.raw_owner == nil then return end -- Uninitialised RR set
 					ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				end
-				return ret >= 0 and ffi.string(rrset_buf)
+				if ret < 0 then return nil, ffi.string(knot.knot_strerror(ret)) end
+				return ffi.string(rrset_buf)
 			else
 				return string.format('%s\t%s\t%s', rr:owner(), const_class_str[rr:class()], const_type_str[rr:type()])
 			end
 		end,
-		__index = function(t,k,v) print (t,k,v) assert(false) end,
 	}
 })
 
@@ -677,6 +706,9 @@ ffi.metatype( knot_pkt_t, {
 	__len = function(pkt)
 		assert(pkt ~= nil) return pkt.size
 	end,
+	__ipairs = function(self)
+		return ipairs(self:section(const_section.ANSWER))
+	end,
 	__index = {
 		-- Header
 		id = function (pkt, val)
@@ -714,6 +746,9 @@ ffi.metatype( knot_pkt_t, {
 		qclass = function(pkt) return knot.knot_pkt_qclass(pkt) end,
 		qtype  = function(pkt) return knot.knot_pkt_qtype(pkt) end,
 		-- Sections
+		empty = function (pkt)
+			return pkt.rrset_count == 0
+		end,
 		question = function (pkt, owner, rtype, rclass)
 			if pkt == nil then return nil end
 			if rclass == nil then rclass = const_class.IN end

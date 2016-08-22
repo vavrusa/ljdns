@@ -10,11 +10,11 @@ end
 
 -- Add RR to packet and send it out if it's full
 local function add_rr(req, writer, rr)
-	if not req.answer:put(rr, true) then
+	if not req.answer:put(rr, req.xfer) then
 		assert(writer(req, req.answer, req.addr))
 		req.msg:toanswer(req.answer)
 		req.answer:aa(true)
-		req.answer:put(rr, true) -- Promise not to access RR afterwards
+		req.answer:put(rr, req.xfer) -- Promise not to access RR afterwards
 		return 1
 	end
 	return 0
@@ -58,6 +58,7 @@ local function serve(self, req, writer)
 	if not req.rr then req.file_rr = ffi.gc(dns.rrset(nil, 0), dns.rrset.clear) end
 	req.answer:aa(true)
 	req.answer:rd(false)
+	req.answer:rcode(dns.rcode.NXDOMAIN)
 	-- Start streaming zone
 	local parser, rr = req.file_parser, req.file_rr
 	rr.raw_owner = dns.todname(parser.r_owner)
@@ -76,12 +77,22 @@ local function serve(self, req, writer)
 			elseif cmp > 0 or qtype ~= rr:type() then
 				skip = true       -- Skip this record
 			else found = true end -- Remember when we find a result
+			-- Matching name found, turn into NOERROR
+			if cmp == 0 then req.answer:rcode(dns.rcode.NOERROR) end
 		end
 		-- Construct RR set object and append to packet
 		if not skip then
-			rr:add(parser.r_data, parser.r_ttl, parser.r_data_length)
+			-- Zone transfers are optimised and stream records to message stream
+			-- without keeping them around for further manipulation
+			if req.xfer then
+				rr:add(parser.r_data, parser.r_ttl, parser.r_data_length)
+				npkts = npkts + add_rr(req, writer, rr)
+			else
+				local copy = rr:copy()
+				copy:add(parser.r_data, parser.r_ttl, parser.r_data_length)
+				npkts = npkts + add_rr(req, writer, copy)
+			end
 			nrrs = nrrs + 1
-			npkts = npkts + add_rr(req, writer, rr)
 			rr:clear()
 		end
 		-- Keep SOA handy for later
@@ -93,11 +104,11 @@ local function serve(self, req, writer)
 	parser:reset()
 	-- Add final SOA or SOA non-existence proof
 	if soa then
-		if not found and not req.xfer then
-			req.answer:begin(dns.section.AUTHORITY)
-		end
-		if not found or req.xfer then
+		if req.xfer then
 			add_rr(req, writer, soa)
+		elseif not found then
+			
+			table.insert(req.authority, soa) -- Authority SOA
 		end
 	end
 	req:vlog('%s: stream end (%d records, %d messages, %d msec)',

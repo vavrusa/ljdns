@@ -354,6 +354,19 @@ Now that we have signature created, we can verify it using the same key.
 assert(signer:verify(rr, rrsig))
 ```
 
+Authenticated denials of non-existence are somewhat supported - RFC4470 *White lies* and
+NSEC shotgun, where closest successor of QNAME is returned with NSEC bitmap listing all types but QTYPE.
+There are no helpers for off-line signed zones, where NSEC chains must be built first in
+order to determine next closer record and no wildcard expansion proof. You're on your own.
+
+```lua
+local owner = dns.dname('\7example')
+-- Deny existence of 'example.' and type A
+local nsec = dnssec.denial(owner, dns.type.A)
+-- Names that do not exist are simplified, as only NSEC and RRSIG can exist
+local nsec = dnssec.denial(owner, dns.type.A, true)
+```
+
 ### Caveats
 
 There is a caveat with packet parsing, as LuaJIT [doesn't GC cdata](http://luajit.org/ext_ffi_semantics.html#gc), the Lua string with a wire must be referenced during the lifetime of the packet.

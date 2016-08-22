@@ -2,6 +2,15 @@ local utils = {}
 local ffi = require('ffi')
 local bit = require('bit')
 
+-- Compatibility with older LJ that doesn't have table.clear()
+if not table.clear then
+	table.clear = function (t)  -- luacheck: ignore
+		for i, _ in ipairs(t) do
+			t[i] = nil
+		end
+	end
+end
+
 -- Return DLL extension
 function utils.dll_versioned(lib, ver)
 	assert(jit)
@@ -42,6 +51,7 @@ int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
 typedef uint8_t knot_rdata_t;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
 uint8_t *knot_rdata_data(const knot_rdata_t *rr);
+size_t knot_rdata_array_size(uint16_t size);
 ]]
 
 -- Byte order conversions
@@ -57,9 +67,10 @@ local rshift,band = bit.rshift,bit.band
 
 -- Compute RDATA set length
 local function rdsetlen(rr)
-	local len = 0
+	local p, len = rr.raw_data, 0
 	for _ = 1,rr.rdcount do
-		len = len + (knot.knot_rdata_rdlen(rr.raw_data + len) + 4)
+		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
+		len = len + rdlen
 	end
 	return len
 end
@@ -69,9 +80,20 @@ local function rdsetget(rr, n)
 	assert(n < rr.rdcount)
 	local p = rr.raw_data
 	for _ = 1,n do
-		p = p + (knot.knot_rdata_rdlen(p) + 4)
+		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p))
+		p = p + rdlen
 	end
 	return p
+end
+
+local function rdataiter(rr, it)
+	it[1] = it[1] + 1
+	if it[1] < rr.rdcount then
+		local rdata = it[2]
+		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(rdata))
+		it[2] = it[2] + rdlen
+		return it, rdata
+	end
 end
 
 -- Domain name wire length
@@ -142,7 +164,6 @@ utils.wire_reader=wire_reader
 
 -- Export low level accessors
 utils.rdlen = function (rdata)
-	if type(rdata) == 'string' then return #rdata end
 	return knot.knot_rdata_rdlen(rdata)
 end
 utils.rddata = function (rdata)
@@ -150,6 +171,7 @@ utils.rddata = function (rdata)
 end
 utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
+utils.rdataiter = rdataiter
 utils.dnamelen = dnamelen
 utils.dnamelenraw = dnamelenraw
 utils.dnamecmp = dnamecmp

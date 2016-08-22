@@ -25,7 +25,6 @@ local gettime = function()
 	return (0.000001 * tonumber(tv.tv_usec) + tonumber(tv.tv_sec))
 end
 
-if not table.clear then table.clear = function(t) t = {} end end -- luacheck: ignore
 -- Negotiate buffer sizes
 local bufsize_min = 256 * 1024
 -- No SIGPIPE on broken connections
