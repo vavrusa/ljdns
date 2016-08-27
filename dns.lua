@@ -4,7 +4,9 @@ local ffi = require('ffi')
 local bit = require('bit')
 local math = require('math')
 local utils = require('dns.utils')
+local n16, n32 = utils.n16, utils.n32
 local knot = utils.clib('libknot', {2,3})
+
 ffi.cdef[[
 /*
  * Data structures
@@ -389,14 +391,14 @@ local rdata = {
 		rdata = ffi.cast(u8_p, rdata)
 		rdata = rdata + utils.dnamelenraw(rdata) -- Primary NS
 		rdata = rdata + utils.dnamelenraw(rdata) -- Mailbox
-		return utils.n32(ffi.cast(u32_p, rdata)[0])
+		return n32(ffi.cast(u32_p, rdata)[0])
 	end,
 	soa_minttl = function(rdata)
 		rdata = ffi.cast(u8_p, rdata)
 		rdata = rdata + utils.dnamelenraw(rdata) -- Primary NS
 		rdata = rdata + utils.dnamelenraw(rdata) -- Mailbox
 		rdata = rdata + 4 * ffi.sizeof('uint32_t')
-		return utils.n32(ffi.cast(u32_p, rdata)[0])
+		return n32(ffi.cast(u32_p, rdata)[0])
 	end,
 }
 
@@ -570,6 +572,11 @@ local function edns_t(version, payload)
 end
 
 -- Metatype for packet section
+local function pktsection_iter(t, i)
+	i = i + 1
+	if i >= t.count then return end
+	return i, t[i]
+end
 ffi.metatype(ffi.typeof('knot_pktsection_t'), {
 	__len = function (t) return t.count end,
 	__index = function (t, k)
@@ -577,13 +584,7 @@ ffi.metatype(ffi.typeof('knot_pktsection_t'), {
 		return knot.knot_pkt_rr(t, k)
 	end,
 	__ipairs = function (t)
-		local i,n = 0, #t
-		return function()
-			i = i + 1
-			if i <= n then
-				return i-1, t[i-1][0]
-			end
-		end
+		return pktsection_iter, t, -1
 	end
 })
 
@@ -591,8 +592,8 @@ ffi.metatype(ffi.typeof('knot_pktsection_t'), {
 local knot_pkt_t = ffi.typeof('knot_pkt_t')
 local function pkt_cnt(pkt, off, val)
 	local ptr = ffi.cast(u16_p, pkt.wire + off)
-	if val ~= nil then ptr[0] = utils.n16(val) end
-	return utils.n16(ptr[0])
+	if val ~= nil then ptr[0] = n16(val) end
+	return n16(ptr[0])
 end
 local function pkt_flags(pkt, idx, off, val)
 	if val ~= nil then
@@ -721,8 +722,8 @@ ffi.metatype( knot_pkt_t, {
 		id = function (pkt, val)
 			assert(pkt ~= nil)
 			local id_wire = ffi.cast(u16_p, pkt.wire)
-			if val ~= nil then id_wire[0] = utils.n16(val) end
-			return utils.n16(id_wire[0])
+			if val ~= nil then id_wire[0] = n16(val) end
+			return n16(id_wire[0])
 		end,
 		qdcount = function(pkt, val) return pkt_cnt(pkt, 4,  val) end,
 		ancount = function(pkt, val) return pkt_cnt(pkt, 6,  val) end,
@@ -788,7 +789,7 @@ ffi.metatype( knot_pkt_t, {
 			-- @note this is a workaround for libknot quirk, where the TSIG RR is on the wire
 			--       for outgoing packets, but is stripped from incoming packets
 			-- @note 'parsed' represents size without TSIG, 'size' will include TSIG
-			assert(pkt)
+			assert(pkt ~= nil)
 			local keep_size = pkt.size
 			local ret = knot.knot_pkt_parse(pkt, 0)
 			if ret == 0 then
@@ -798,15 +799,12 @@ ffi.metatype( knot_pkt_t, {
 			else return false, ret end
 		end,
 		begin = function (pkt, section)
-			assert(pkt)
-			if section >= pkt:section() then 
-				return knot.knot_pkt_begin(pkt, section)
-			else
-				error("cannot write to finished section")
-			end
+			assert(pkt ~= nil)
+			assert(section >= pkt:section(), "cannot write to finished section")
+			return knot.knot_pkt_begin(pkt, section)
 		end,
 		copy = function (pkt)
-			assert(pkt)
+			assert(pkt ~= nil)
 			local dst = knot_pkt_t(pkt.max_size)
 			ffi.copy(dst.wire, pkt.wire, pkt.size)
 			dst.size = pkt.size

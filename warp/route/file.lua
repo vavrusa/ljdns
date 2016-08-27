@@ -1,10 +1,10 @@
-local dns, go, rrparser = require('dns'), require('dns.aio'), require('dns.rrparser')
+local dns, rrparser = require('dns'), require('dns.rrparser')
 local ffi = require('ffi')
 
 local M = {}
 
 -- Module initialiser
-function M.init(self, conf)
+function M.init(conf)
 	return M -- No init
 end
 
@@ -33,24 +33,17 @@ local function zone_get(name)
 	return zonefile, mtime
 end
 
--- Check if we have a valid zonefile
-local function accept(self, req)
+-- Answer query from zonefile
+local function serve(self, req, writer)
 	local name = req.query:qname()
 	local zonefile, mtime = zone_get(name)
 	if mtime == 0 then
-		req:vlog('%s: refused (no zone found)', name)
+		req:vlog('%s: refused (no zone found)', zonefile)
 		req.answer:rcode(dns.rcode.REFUSED)
-		return false
-	else
-		req.file_path = zonefile
-		req.file_mtime = mtime
-		return true
+		return -- No file to process, bail
 	end
-end
-
--- Answer query from zonefile
-local function serve(self, req, writer)
-	local tstart = go.now()
+	req.file_path = zonefile
+	req.file_mtime = mtime
 	local name = req.query:qname()
 	-- Note: rrset is going to contain unsafe owner to avoid allocation on every RR (expensive)
 	--       we use custom GC routine to not attempt to free unsafe owner
@@ -112,11 +105,9 @@ local function serve(self, req, writer)
 		end
 	end
 	req:vlog('%s: stream end (%d records, %d messages, %d msec)',
-	     req.file_path, nrrs, npkts, (go.now() - tstart) * 1000.0)
-	return true, nil
+	     req.file_path, nrrs, npkts, (os.time() - req.now) * 1000.0)
+	return not req.xfer, nil
 end
-
--- Export module API
-M.accept = accept
 M.serve = serve
+
 return M

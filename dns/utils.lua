@@ -55,15 +55,15 @@ size_t knot_rdata_array_size(uint16_t size);
 ]]
 
 -- Byte order conversions
+local rshift,band = bit.rshift,bit.band
 local function n32(x) return x end
 local n16 = n32
 if ffi.abi('le') then
 	n32 = bit.bswap
-	function n16(x) return bit.rshift(n32(x), 16) end
+	function n16(x) return rshift(n32(x), 16) end
 end
 utils.n32 = n32
 utils.n16 = n16
-local rshift,band = bit.rshift,bit.band
 
 -- Compute RDATA set length
 local function rdsetlen(rr)
