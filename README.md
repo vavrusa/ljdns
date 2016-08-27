@@ -617,7 +617,7 @@ The asynchronous I/O is based on [ljsyscall][ljsyscall] and uses `epoll/kqueue` 
 You can create coroutines, very much like in Go language.
 
 ```lua
-local go = dns.aio
+local go = dns.nbio
 go(function ()
 	print('Hi from Alice!')
 end)
@@ -638,11 +638,11 @@ assert(go.step(1)) -- Only one step with 1s timeout
 
 ### TCP example
 
-When inside coroutines, you can use `dns.aio` functions instead of socket meta methods.
+When inside coroutines, you can use `dns.nbio` functions instead of socket meta methods.
 Let's make a listener and a client and make them exchange messages.
 
 ```lua
-local go = dns.aio
+local go = dns.nbio
 local addr = go.addr('127.0.0.1', 0) -- Make address object
 local master = go.socket(addr, true) -- Make bound socket
 assert(go(function ()                -- First coroutine acts as server

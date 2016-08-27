@@ -10,7 +10,7 @@
 -- $ namepile.lua -v pile @127.0.0.1#4242 &
 -- $ dig.lua AXFR @127.0.0.1#4242 example.
 local kdns, rrparser = require('dns'), require('dns.rrparser')
-local go, utils = require('dns.aio'), require('dns.utils')
+local go, utils = require('dns.nbio'), require('dns.utils')
 local ffi = require('ffi')
 local vlog = function () end
 local function log(level, addr, msg, ...)

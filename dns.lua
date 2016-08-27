@@ -343,10 +343,10 @@ ffi.metatype( knot_dname_t, {
 			assert(ffi.istype(knot_dname_t, child))
 			return child:within(dname)
 		end,
-		towire = function(dname)
+		towire = function(dname, len)
 			assert(ffi.istype(knot_dname_t, dname))
 			assert(dname.bytes ~= nil)
-			return ffi.string(dname.bytes, dname:len())
+			return ffi.string(dname.bytes, len or dname:len())
 		end,
 		tostring = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
@@ -540,6 +540,7 @@ local function edns_payload(rr, val)
 	return rr:class()
 end
 local function edns_do(rr, val)
+	if rr == nil then return end
 	local ttl = rr:ttl()
 	if val ~= nil then
 		ttl = bit.bor(ttl, val and 0x8000 or 0x00)
@@ -551,14 +552,20 @@ local function edns_option(rr, code, val)
 	if val ~= nil then knot.knot_edns_add_option(rr, code, #val, val, nil) end
 	return knot.knot_edns_has_option(rr, code)
 end
-local function edns_t(version, payload)
+local function edns_init(rr, version, payload)
+	assert(rr)
 	if version == nil then version = 0 end
 	if payload == nil then payload = 4096 end
+	-- Clear OPTs
+	rr:clear()
+	rr:add('', 0)
+	-- Set payload/version
+	edns_payload(rr, payload)
+	edns_version(rr, version)
+end
+local function edns_t(version, payload)
 	local rr = knot_rrset_t('\0', const_type.OPT, payload)
-	if rr then
-		rr:add('', 0)
-		edns_version(rr, version)
-	end
+	edns_init(rr, version, payload)
 	return rr
 end
 
@@ -741,7 +748,8 @@ ffi.metatype( knot_pkt_t, {
 		-- Question
 		qname = function(pkt)
 			if pkt.qname_size <= 0 then return nil end
-			return knot_dname_t(pkt.wire + 12, pkt.qname_size)
+			-- QNAME is sanitised at this point via parse()
+			return ffi.cast('knot_dname_t *', pkt.wire + 12)[0]
 		end,
 		qclass = function(pkt) return knot.knot_pkt_qclass(pkt) end,
 		qtype  = function(pkt) return knot.knot_pkt_qtype(pkt) end,
@@ -926,6 +934,7 @@ local M = {
 	rrset = knot_rrset_t,
 	packet = knot_pkt_t,
 	edns = {
+		init = edns_init,
 		rrset = edns_t,
 		version = edns_version,
 		payload = edns_payload,

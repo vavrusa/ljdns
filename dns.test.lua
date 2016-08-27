@@ -219,7 +219,7 @@ for i = 1, #names - 1 do
 end
 print('[ OK ] dns.utils.dnamecmp')
 -- Test asynchronous I/O
-local go = require('dns.aio')
+local go = require('dns.nbio')
 local server = go.socket(go.addr('127.0.0.1', 0), true)
 local ffi = require('ffi')
 -- Function sends PING to client, expects PONG back
@@ -291,7 +291,7 @@ S.util.rm(tmpdir)
 print('[ OK ] dns.lmdb')
 
 -- Test TLS
-local go = require('dns.aio')
+local go = require('dns.nbio')
 local server = go.socket(go.addr('127.0.0.1', 0), true)
 local tls = require('dns.tls')
 -- Function sends PING to client, expects PONG back

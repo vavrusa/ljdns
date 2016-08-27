@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 local kdns = require('dns')
 local sift, utils = require('dns.sift'), require('dns.utils')
-local aio = require('dns.aio')
+local aio = require('dns.nbio')
 local lmdb_ok, lmdb = pcall(require, 'dns.lmdb')
 local dnssec_ok, dnssec = pcall(require, 'dns.dnssec')
 
@@ -70,7 +70,7 @@ local function bench_lmdb(env, db, step)
 end
 
 local function bench_signer(set, test_key)
-	local limit = 10000 - 1
+	local limit = 20000 - 1
 	-- Sign selected records in the set
 	local key = dnssec.key()
 	assert(key:algo(test_key.algorithm))

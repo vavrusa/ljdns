@@ -116,7 +116,7 @@ for _,q in ipairs(planned) do
 end
 
 -- Send and wait for answers
-local go = require('dns.aio')
+local go = require('dns.nbio')
 local addr, started = go.addr(host, port), go.now()
 local send, recv = go.udpsend, go.udprecv
 if tcp then send, recv = go.tcpsend, go.tcprecv end

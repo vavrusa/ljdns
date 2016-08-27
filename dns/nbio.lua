@@ -20,13 +20,16 @@ local S = require('syscall')
 local c, t = S.c, S.t
 local ffi, bit = require('ffi'), require('bit')
 local n16 = require('dns.utils').n16
-local gettime = function()
-	local tv = S.gettimeofday()
-	return (0.000001 * tonumber(tv.tv_usec) + tonumber(tv.tv_sec))
+local tv_cached = S.gettimeofday()
+local gettime = function(coarse)
+	local tv = S.gettimeofday(tv_cached)
+	return coarse and tonumber(tv.tv_sec) or (0.000001 * tonumber(tv.tv_usec) + tonumber(tv.tv_sec))
 end
 
+-- Consecutive ops limit
+local rdops, rdops_max = 0, 256
 -- Negotiate buffer sizes
-local bufsize_min = 256 * 1024
+local bufsize_min = 128 * 1024
 -- No SIGPIPE on broken connections
 S.sigaction('pipe', 'ign')
 -- Support MSG_FASTOPEN
@@ -96,10 +99,11 @@ end
 -- Module interface
 local M = {
 	backend = 'ljsyscall',
-	pollfd = poll:init(64),
+	pollfd = poll:init(256),
 	coroutines = 0,
 	readers = {},
-	writers = {}
+	writers = {},
+	timeouts = {},
 }
 
 -- Create socket address
@@ -142,9 +146,9 @@ local function getsocket(addr, tcp)
 		end
 		-- Negotiate socket buffers for bound sockets to make sure we can get 64K datagrams through
 		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.RCVBUF)
-		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.RCVBUF, math.min(ok, bufsize_min)) end
+		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.RCVBUF, math.max(ok, bufsize_min)) end
 		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.SNDBUF)
-		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.SNDBUF, math.min(ok, bufsize_min)) end
+		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.SNDBUF, math.max(ok, 4*bufsize_min)) end
 	end
 	sock:nonblock()
 	return sock, err
@@ -174,6 +178,12 @@ end
 
 -- Receive datagrams (with yielding when not ready)
 local function nbrecvfrom(sock, addr, buf, buflen)
+	-- Control starvation by limiting number of consecutive read ops
+	rdops = rdops + 1
+	if rdops > rdops_max then
+		coroutine.yield(M.readers, sock)
+		rdops = 0
+	end
 	local ret, err, saddr = sock:recvfrom(buf, buflen, nil, addr)
 	if err and err.errno == c.E.AGAIN then
 		coroutine.yield(M.readers, sock)
@@ -279,10 +289,16 @@ local function accept(sock)
 	coroutine.yield(M.readers, sock)
 	return sock:accept('nonblock')
 end
+local function block(sock, timeout)
+	assert(sock)
+	coroutine.yield(M.readers, sock)
+	if timeout then
+		table.insert(M.timeouts, {os.time() + timeout, sock})
+	end
+end
 
 -- Transfer ownerwhip to a different waitlist
-local function enqueue(waitlist, co, s)
-	local fd = s:getfd()
+local function enqueue(waitlist, co, fd)
 	local queue = waitlist[fd]
 	if not queue then
 		waitlist[fd] = {co}
@@ -305,11 +321,12 @@ local function resume(curlist, fd)
 		return false, nextlist
 	end
 	-- Transfer ownerwhip to a different waitlist
+	if type(what) ~= 'number' then what = what:getfd() end
 	enqueue(nextlist or M.readers, co, what)
 	-- Stop listening for current operation if the coroutine changed
-	if fd ~= what:getfd() or curlist ~= nextlist then
+	if fd ~= what or curlist ~= nextlist then
 		assert(M.pollfd:del(fd, curlist == M.writers))
-		assert(M.pollfd:add(what:getfd(), nextlist == M.writers))
+		assert(M.pollfd:add(what, nextlist == M.writers))
 	end
 	return true
 end
@@ -323,8 +340,9 @@ local function start(closure, ...)
 		return ok, list
 	end
 	M.coroutines = M.coroutines + 1
+	if type(what) ~= 'number' then what = what:getfd() end
 	enqueue(list or M.readers, co, what)
-	assert(M.pollfd:add(what:getfd(), list == M.writers))
+	assert(M.pollfd:add(what, list == M.writers))
 	return co
 end
 
@@ -352,6 +370,16 @@ local function step(timeout)
 		end
 		if err then break else ok = true end
 	end
+	-- Expire timeouts
+	if M.timeouts[1] then
+		local now = gettime()
+		for i, t in ipairs(M.timeouts) do
+			if now >= t[1] then
+				table.remove(M.timeouts, i)
+				ok, err = resume(M.readers, t[2])
+			end
+		end
+	end
 	return ok, err
 end
 
@@ -360,7 +388,7 @@ M.addr = function (host, port) return getaddr(host, port) end
 M.socket = getsocket
 M.now = gettime
 M.go  = start
-M.step = step
+M.step, M.block = step, block
 M.udpsend, M.tcpsend = udpsend, tcpsend
 M.udprecv, M.tcprecv = udprecv, tcprecv
 M.connect = connect
