@@ -22,7 +22,11 @@ end
 -- Find appropriate zonefile and mtime for this query
 local function zone_get(name)
 	local zonefile = name:tostring()..'zone'
-	assert(not zonefile:find('/', 1, true) and not zonefile:find('..', 1, true))
+	if zonefile:find('/', 1, true) then
+		zonefile = zonefile:gsub('/','_')
+	else
+		assert(not zonefile:find('..', 1, true), 'QNAME contains "..", this is considered malformed')
+	end
 	local mtime = dns.utils.mtime(zonefile)
 	for _ = 2, name:labels() do
 		if mtime > 0 then break end
@@ -35,6 +39,8 @@ end
 
 -- Answer query from zonefile
 local function serve(self, req, writer)
+	-- Check if already answered
+	if req.answer:aa() then return end
 	local name = req.query:qname()
 	local zonefile, mtime = zone_get(name)
 	if mtime == 0 then
@@ -100,9 +106,9 @@ local function serve(self, req, writer)
 		if req.xfer then
 			add_rr(req, writer, soa)
 		elseif not found then
-			
 			table.insert(req.authority, soa) -- Authority SOA
 		end
+		req.soa = soa
 	end
 	req:vlog('%s: stream end (%d records, %d messages, %d msec)',
 	     req.file_path, nrrs, npkts, (os.time() - req.now) * 1000.0)

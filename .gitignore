@@ -1,0 +1,9 @@
+.DS_Store
+*.o
+*.out
+*.log
+/kdns_clib.so*
+/*.crt
+/*.key
+/zones
+/kasp
