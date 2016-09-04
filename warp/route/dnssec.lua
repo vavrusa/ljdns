@@ -1,11 +1,24 @@
-local dns, dnssec = require('dns'), require('dns.dnssec')
+local dns, dnssec, go = require('dns'), require('dns.dnssec'), require('dns.nbio')
 local ffi = require('ffi')
 
 local M = {}
 
+-- Make sure the signer if ready for signing
+local function check_signer(self, req)
+	if not self.next_time or req.now < self.next_time then return end
+	local keyset = self.keyset
+	keyset:action(self.next_action, req.now)
+	-- Update keyset and signer
+	self.zsk, self.ksk, self.rolling = keyset:zsk(), keyset:ksk(), keyset:rolling()
+	self.signer = dnssec.signer(self.zsk)
+	-- Plan next action
+	self.next_time, self.next_action = keyset:plan(req.now)
+end
+
 -- Sign records in section
-local function sign_section(self, section, writer)
+local function sign_section(self, req, section, writer)
 	local signer = self.signer
+	local zone_name = req.soa and req.soa:owner()
 	-- Merge/dedup records before signing
 	local dedup, cloned = nil, false
 	-- Generate signatures for answers
@@ -25,7 +38,14 @@ local function sign_section(self, section, writer)
 			end
 		end
 	end
-	if dedup then table.insert(rrsigs, signer:sign(dedup)) end
+	if dedup then
+		local signer = self.signer		
+		-- Sign DNSKEY with KSK
+		if dedup:type() == dns.type.DNSKEY then
+			signer = dnssec.signer(self.ksk)
+		end
+		table.insert(rrsigs, signer:sign(dedup, nil, req.now, zone_name))
+	end
 	-- Write signatures to packet
 	for _, rr in ipairs(rrsigs) do
 		writer(section, rr)
@@ -34,15 +54,35 @@ end
 
 -- Authenticated denial of existence
 local function denial(self, req, nxdomain)
-	local ttl = 0
 	-- Fetch MINTTL from authority SOA
-	local soa = req.authority[1]
-	if soa and  soa:type() == dns.type.SOA then
-		ttl = dns.rdata.soa_minttl(soa:rdata(0))
-	end
+	local ttl = req.soa and dns.rdata.soa_minttl(req.soa:rdata(0)) or 0
 	local nsec = dnssec.denial(req.query:qname(), req.query:qtype(), ttl, nxdomain)
 	-- Add NSEC to authority
 	table.insert(req.authority, nsec)
+end
+
+-- Return DNSKEY for this zone
+local function dnskey(self, req, zone)
+	-- Add active/published ZSK
+	local rr = dns.rrset(zone, dns.type.DNSKEY)
+	           :add(self.zsk:rdata(), req.soa:ttl())
+	req.answer:put(rr)
+	if self.rolling then
+		rr = dns.rrset(zone, dns.type.DNSKEY)
+			:add(self.rolling:rdata(), req.soa:ttl())
+		req.answer:put(rr)
+	end
+	-- Add KSK
+	if self.ksk then
+		rr = dns.rrset(zone, dns.type.DNSKEY)
+			:add(self.ksk:rdata(), req.soa:ttl())
+		req.answer:put(rr)
+	end
+	-- Remove authority SOA (if present)
+	local soa = table.remove(req.authority)
+	if soa and soa:type() ~= dns.type.SOA then
+		table.insert(req.authority, soa)
+	end
 end
 
 -- Sign records in the answer
@@ -51,16 +91,22 @@ local function serve(self, req, writer)
 	if req.xfer or not dns.edns.dobit(req.query.opt) then
 		return
 	end
-	-- If NOERROR or NXDOMAIN, generate denial
+	-- Check signer
+	check_signer(self, req)
 	local nxdomain = (req.answer:rcode() == dns.rcode.NXDOMAIN)
-	if nxdomain or req.answer:empty() then
+	local qname, qtype = req.query:qname(), req.query:qtype()
+	-- If this is DNSKEY query, answer it
+	if qtype == dns.type.DNSKEY and req.soa and qname:equals(req.soa:owner()) then
+		dnskey(self, req, qname)
+	elseif nxdomain or req.answer:empty() then
+		-- If NOERROR or NXDOMAIN, generate denial
 		denial(self, req, nxdomain)
 		-- Turn NXDOMAIN into NODATA
 		if nxdomain then req.answer:rcode(dns.rcode.NOERROR) end
 	end
-	sign_section(self, req.answer, req.answer.put)
-	sign_section(self, req.authority, table.insert)
-	sign_section(self, req.additional, table.insert)
+	sign_section(self, req, req.answer, req.answer.put)
+	sign_section(self, req, req.authority, table.insert)
+	sign_section(self, req, req.additional, table.insert)
 	-- Set DNSSEC OK
 	dns.edns.dobit(req.opt, true)
 	return true
@@ -68,47 +114,51 @@ end
 
 -- Set ZSK for record signing
 function M.init(conf)
-	local key = dnssec.key()
-	-- Set key algorithm
-	key:algo(dnssec.algo[conf.algo] or dnssec.algo.ecdsa_p256_sha256)
+	conf = conf or {}
+	local o = conf.options or {}
+	local context = {serve=serve}
 	-- If keyfile is not specified, generate it
-	if not conf.key then
-		function bytes (t) return string.char(unpack(t)) end
-		local pem = bytes {
-			0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x42, 0x45, 0x47, 0x49, 0x4e,
-			0x20, 0x50, 0x52, 0x49, 0x56, 0x41, 0x54, 0x45, 0x20, 0x4b,
-			0x45, 0x59, 0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x0a, 0x4d, 0x49,
-			0x47, 0x55, 0x41, 0x67, 0x45, 0x41, 0x4d, 0x42, 0x4d, 0x47,
-			0x42, 0x79, 0x71, 0x47, 0x53, 0x4d, 0x34, 0x39, 0x41, 0x67,
-			0x45, 0x47, 0x43, 0x43, 0x71, 0x47, 0x53, 0x4d, 0x34, 0x39,
-			0x41, 0x77, 0x45, 0x48, 0x42, 0x48, 0x6f, 0x77, 0x65, 0x41,
-			0x49, 0x42, 0x41, 0x51, 0x51, 0x68, 0x41, 0x49, 0x73, 0x69,
-			0x79, 0x44, 0x33, 0x5a, 0x4e, 0x77, 0x7a, 0x69, 0x4d, 0x56,
-			0x5a, 0x70, 0x0a, 0x6b, 0x6d, 0x4a, 0x5a, 0x6b, 0x37, 0x4c,
-			0x57, 0x37, 0x56, 0x44, 0x34, 0x6c, 0x5a, 0x52, 0x4d, 0x67,
-			0x31, 0x2b, 0x4f, 0x71, 0x62, 0x4d, 0x67, 0x73, 0x44, 0x56,
-			0x55, 0x6f, 0x41, 0x6f, 0x47, 0x43, 0x43, 0x71, 0x47, 0x53,
-			0x4d, 0x34, 0x39, 0x41, 0x77, 0x45, 0x48, 0x6f, 0x55, 0x51,
-			0x44, 0x51, 0x67, 0x41, 0x45, 0x38, 0x75, 0x44, 0x37, 0x43,
-			0x34, 0x54, 0x48, 0x54, 0x4d, 0x2f, 0x77, 0x0a, 0x37, 0x75,
-			0x68, 0x72, 0x79, 0x52, 0x53, 0x54, 0x6f, 0x65, 0x45, 0x2f,
-			0x6a, 0x4b, 0x54, 0x37, 0x38, 0x2f, 0x70, 0x38, 0x35, 0x33,
-			0x52, 0x58, 0x30, 0x4c, 0x35, 0x45, 0x77, 0x72, 0x5a, 0x72,
-			0x53, 0x4c, 0x42, 0x75, 0x62, 0x4c, 0x50, 0x69, 0x42, 0x77,
-			0x37, 0x67, 0x62, 0x76, 0x55, 0x50, 0x36, 0x53, 0x73, 0x49,
-			0x67, 0x61, 0x35, 0x5a, 0x51, 0x34, 0x43, 0x53, 0x41, 0x78,
-			0x4e, 0x6d, 0x0a, 0x59, 0x41, 0x2f, 0x67, 0x5a, 0x73, 0x75,
-			0x58, 0x7a, 0x41, 0x3d, 0x3d, 0x0a, 0x2d, 0x2d, 0x2d, 0x2d,
-			0x2d, 0x45, 0x4e, 0x44, 0x20, 0x50, 0x52, 0x49, 0x56, 0x41,
-			0x54, 0x45, 0x20, 0x4b, 0x45, 0x59, 0x2d, 0x2d, 0x2d, 0x2d,
-			0x2d, 0x0a,
-		}
-		key:privkey(pem) -- TODO this is just sample key
+	if conf.key then
+		local key = dnssec.key()
+		key:algo(dnssec.algo[conf.algo] or dnssec.algo.ecdsa_p256_sha256)
+		key:privkey(key)
+		context.manual = true
+		context.zsk = key
+		context.signer = dnssec.signer(key)
+		assert(key:can_sign(), 'given key cannot be used for signing')
+	else
+		-- Set KASP defaults if not configured
+		conf.kasp = conf.kasp or 'kasp'
+		conf.keystore = conf.keystore or 'default'
+		conf.policy = conf.policy or 'default'
+		conf.keyset = conf.keyset or 'default'
+		o.policy = o.policy or {}
+		o.policy.keystore = conf.keystore
+		-- Set/update KASP, keystore and keyset
+		local kasp = assert(dnssec.kasp(conf.kasp))
+		local keystore = assert(kasp:keystore(conf.keystore, o.keystore or {}))
+		local policy = assert(kasp:policy(conf.policy, o.policy))
+		local keyset = assert(kasp:keyset(conf.keyset, {policy=conf.policy}))
+		context.keyset = keyset
+		-- Start KASP in manual/automatic mode
+		if o.manual then
+			local zsk, ksk = keyset:zsk(), keyset:ksk()
+			if not zsk then zsk = keyset:generate(false, nil, true) end
+			if not ksk then ksk = keyset:generate(true, nil, true) end
+			context.zsk, context.ksk = zsk, ksk
+			context.signer = dnssec.signer(zsk)
+			context.manual = true
+		else
+			-- Plan next keyset action
+			local now = os.time()
+			local time, action = keyset:plan(now)
+			context.next_time, context.next_action = time, action
+			context.zsk, context.ksk = keyset:zsk(), keyset:ksk()
+			context.signer = dnssec.signer(context.zsk)
+		end
 	end
 	-- Return signer context
-	assert(key:can_sign(), 'given key cannot be used for signing')
-	local signer = dnssec.signer(key)
-	return {key=key, signer=signer, serve=serve}
+	return context
 	
 end
 
