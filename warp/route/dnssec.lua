@@ -91,9 +91,14 @@ local function serve(self, req, writer)
 	if req.xfer or not dns.edns.dobit(req.query.opt) then
 		return
 	end
+	-- Sign only NOERROR/NXDOMAIN responses
+	local rcode = req.answer:rcode()
+	local nxdomain = (rcode == dns.rcode.NXDOMAIN)
+	if not nxdomain and rcode ~= dns.rcode.NOERROR then
+		return
+	end
 	-- Check signer
 	check_signer(self, req)
-	local nxdomain = (req.answer:rcode() == dns.rcode.NXDOMAIN)
 	local qname, qtype = req.query:qname(), req.query:qtype()
 	-- If this is DNSKEY query, answer it
 	if qtype == dns.type.DNSKEY and req.soa and qname:equals(req.soa:owner()) then

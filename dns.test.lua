@@ -198,26 +198,6 @@ stream = nil
 rr = nil
 print('[ OK ] dns.rrparser.stream')
 collectgarbage()
--- Test utilities
-local utils = require('dns.utils')
-local names = {
-	'example',
-	'a.example',
-	'yljkjljk.a.example',
-	'z.a.example',
-	'zabc.a.example',
-	'z.example',
-	'\001.z.example',
-	'*.z.example',
-	'\200.z.example',
-}
-for i = 1, #names do
-	names[i] = dns.dname.parse(names[i])
-end
-for i = 1, #names - 1 do
-	assert(utils.dnamecmp(names[i], names[i + 1]) < 0)
-end
-print('[ OK ] dns.utils.dnamecmp')
 -- Test asynchronous I/O
 local go = require('dns.nbio')
 local server = go.socket(go.addr('127.0.0.1', 0), true)

@@ -17,7 +17,8 @@ local function serve(self, req, writer)
 		req.answer:rcode(dns.rcode.NOERROR)
 	-- TXT apex, synthesise TXT
 	else
-		local addr = tostring(req.addr.addr)
+		local addr = req.addr
+		if type(addr) ~= 'string' then addr = tostring(addr.addr) end
 		local rr = dns.rrset(self.zone, dns.type.TXT)
 		           :add(dns.rdata.txt(addr))
 		req.answer:put(rr, true)

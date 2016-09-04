@@ -3,11 +3,6 @@ local ffi = require('ffi')
 
 local M = {}
 
--- Module initialiser
-function M.init(conf)
-	return M -- No init
-end
-
 -- Add RR to packet and send it out if it's full
 local function add_rr(req, writer, rr)
 	if not req.answer:put(rr, req.xfer) then
@@ -20,21 +15,21 @@ local function add_rr(req, writer, rr)
 	return 0
 end
 -- Find appropriate zonefile and mtime for this query
-local function zone_get(name)
-	local zonefile = name:tostring()..'zone'
+local function zone_get(self, name)
+	local zonefile = name:tostring() .. 'zone'
 	if zonefile:find('/', 1, true) then
 		zonefile = zonefile:gsub('/','_')
 	else
 		assert(not zonefile:find('..', 1, true), 'QNAME contains "..", this is considered malformed')
 	end
-	local mtime = dns.utils.mtime(zonefile)
+	local mtime = dns.utils.mtime(self.path .. zonefile)
 	for _ = 2, name:labels() do
 		if mtime > 0 then break end
 		local next_label = zonefile:find('.', 1, true)
 		zonefile = zonefile:sub(next_label + 1)
-		mtime = dns.utils.mtime(zonefile)
+		mtime = dns.utils.mtime(self.path .. zonefile)
 	end
-	return zonefile, mtime
+	return self.path .. zonefile, mtime
 end
 
 -- Answer query from zonefile
@@ -42,7 +37,7 @@ local function serve(self, req, writer)
 	-- Check if already answered
 	if req.answer:aa() then return end
 	local name = req.query:qname()
-	local zonefile, mtime = zone_get(name)
+	local zonefile, mtime = zone_get(self, name)
 	if mtime == 0 then
 		req:vlog('%s: refused (no zone found)', zonefile)
 		req.answer:rcode(dns.rcode.REFUSED)
@@ -114,6 +109,14 @@ local function serve(self, req, writer)
 	     req.file_path, nrrs, npkts, (os.time() - req.now) * 1000.0)
 	return not req.xfer, nil
 end
-M.serve = serve
+
+-- Module initialiser
+function M.init(conf)
+	conf = conf or {}
+	conf.path = conf.path or '.'
+	conf.path = conf.path .. '/'
+	conf.serve = serve
+	return conf
+end
 
 return M

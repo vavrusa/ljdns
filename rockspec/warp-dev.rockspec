@@ -24,6 +24,7 @@ build = {
   },
   modules = {
     ["warp.init"] = "warp/init.lua",
+    ["warp.route"] = "warp/route.lua",
     ["warp.route.dnssec"] = "warp/route/dnssec.lua",
     ["warp.route.etcd"] = "warp/route/etcd.lua",
     ["warp.route.file"] = "warp/route/file.lua",

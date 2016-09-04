@@ -7,19 +7,20 @@ local go, utils = require('dns.nbio'), require('dns.utils')
 -- Support OpenResty modules
 _G.require = require('warp.vendor.resty').require
 
--- TODO: fill this from config
-warp.route {
-	[1] = {
-		require('warp.route.lru').init(),
-		require('warp.route.whoami').init(),
-		-- require('warp.route.lruredis').init({host='/tmp/redis.sock'}),
-		-- require('warp.route.etcd').init({zone = 'skydns.local'}),
-		require('warp.route.file').init(),
-		require('warp.route.dnssec').init {
-			algorithm = 'ecdsa_p256_sha256',
+-- Load default configuration for now
+-- luacheck: ignore
+warp.conf(function()
+	route {
+		lru {},
+		whoami {},
+		file {
+			path = 'zones'
 		},
+		dnssec {
+			algorithm = 'ecdsa_p256_sha256',
+		}
 	}
-}
+end)
 
 -- Writer closures for UDP and TCP
 local function writer_udp(req, msg)
@@ -102,8 +103,7 @@ for k,v in next,arg,0 do
 		help()
 		return 0
 	else
-		local ok, err = utils.chdir(v..'/')
-		if not ok then error(string.format('invalid pile path: %s (%s)', v, err)) end
+		warp.conf(v)
 	end
 end
 

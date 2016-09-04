@@ -65,6 +65,7 @@ local function recycle(r)
 		rqpool_len = rqpool_len + 1
 	end
 end
+M.release = recycle
 
 --
 -- Public interface
@@ -167,9 +168,35 @@ function M.serve(req, writer)
 end
 
 -- Form route
-function M.route(t)
-	for k,v in pairs(t) do M.routes[k] = v end
+function M.route(zone, t)
+	if type(zone) == 'table' and not t then
+		t, zone = zone, 1
+	end
+	M.routes[zone] = t
 	return M
+end
+
+function M.conf(conf)
+	local ok
+	if type(conf) ~= 'function' then
+		ok, conf = pcall(loadfile, conf)
+		if not ok or not conf then
+			return nil, conf
+		end
+	end
+	local env = {conf = M, route = M.route}
+	env = setmetatable(env, {
+		__index = function (t,k)
+			local v = rawget(t, k) or _G[k]
+			if not v then
+				v = require('warp.route')[k]
+				if v then v = v.init end
+			end
+			return v
+		end
+	})
+	setfenv(conf, env)
+	conf()
 end
 
 return M

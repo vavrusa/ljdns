@@ -312,6 +312,20 @@ local _, S = pcall(require, 'syscall')
 if S then
 	utils.chdir = S.chdir
 	utils.mkdir = S.mkdir
+	local ip4, ip6 = S.t.sockaddr_in(), S.t.sockaddr_in6()
+	utils.inaddr = function (addr, port)
+		local n = #addr
+		port = port or 0
+		if n == 4 then
+			ip4.port = port
+			ffi.copy(ip4.addr, addr, n)
+			return ip4
+		elseif n == 16 then
+			ip6.port = port
+			ffi.copy(ip6.sin6_addr, addr, n)
+			return ip6
+		end
+	end
 end
 
 return utils
