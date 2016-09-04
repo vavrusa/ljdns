@@ -108,14 +108,19 @@ local M = {
 
 -- Create socket address
 local function getaddr(host, port)
-	if port == nil then port = 53 end
+	if port == nil then
+		if host:find('/', 1, true) then
+			return t.sockaddr_un(host)
+		end
+		port = 53
+	end
 	local socktype = host:find(':', 1, true) and t.sockaddr_in6 or t.sockaddr_in
 	return socktype(port, host)
 end
 
 -- Create either bound/unbound socket depending
 -- on whether the caller provides address
-local function getsocket(addr, tcp)
+local function getsocket(addr, tcp, client)
 	-- Get either address type or family name
 	local family
 	if type(addr) ~= 'cdata' then
@@ -127,7 +132,7 @@ local function getsocket(addr, tcp)
 	local sock, err = S.socket(family, proto)
 	assert(sock, tostring(err))
 	-- Bind (or listen) on socket if address provided
-	if addr then
+	if addr and not client then
 		-- Reuse address (if not reusing port)
 		sock:setsockopt(c.SOL.SOCKET, c.SO.REUSEPORT or c.SO.REUSEADDR, true)
 		local ok, err = sock:bind(addr)
@@ -155,10 +160,16 @@ local function getsocket(addr, tcp)
 end
 
 -- Receive bytes from stream (with yielding when not ready)
+local rcvbuf = ffi.new('char [?]', 4096)
 local function nbrecv(sock, buf, buflen)
+	if buflen == 0 then return 0 end
+	local short = not buflen
+	if not buf then
+		buf, buflen = rcvbuf, ffi.sizeof(rcvbuf)
+	end
 	buf = ffi.cast('char *', buf)
 	local rcvd = 0
-	local len, err = sock:recv(buf, buflen)
+	local len, err = S.recv(sock, buf, buflen)
 	repeat
 		if not len then
 			-- Receiving failed, bail out on errors
@@ -167,13 +178,15 @@ local function nbrecv(sock, buf, buflen)
 			else break end
 		else
 			rcvd = rcvd + len
-			if len == 0 or rcvd == buflen then break end
+			if len == 0 or rcvd == buflen or short then
+				break
+			end
 			coroutine.yield(M.readers, sock)
 			buf = buf + len
 		end
-		len, err = sock:recv(buf, buflen - rcvd)
+		len, err = S.recv(sock, buf, buflen - rcvd)
 	until rcvd == buflen
-	return rcvd, err
+	return rcvd, err or buf
 end
 
 -- Receive datagrams (with yielding when not ready)
@@ -184,37 +197,36 @@ local function nbrecvfrom(sock, addr, buf, buflen)
 		coroutine.yield(M.readers, sock)
 		rdops = 0
 	end
-	local ret, err, saddr = sock:recvfrom(buf, buflen, nil, addr)
+	local ret, err, saddr = S.recvfrom(sock, buf, buflen, nil, addr)
 	if err and err.errno == c.E.AGAIN then
 		coroutine.yield(M.readers, sock)
-		ret, err, saddr = sock:recvfrom(buf, buflen, nil, addr)
+		ret, err, saddr = S.recvfrom(sock, buf, buflen, nil, addr)
 	end
 	return ret, err or saddr
 end
 
 -- Send bytes to stream (with yielding when not ready)
 local function nbsend(sock, buf, buflen)
-	local ret, err = sock:send(buf, buflen)
+	local ret, err = S.send(sock, buf, buflen)
 	if err and err.errno == c.E.AGAIN then
 		coroutine.yield(M.writers, sock)
-		ret, err = sock:send(buf, buflen)
+		ret, err = S.send(sock, buf, buflen)
 	end
 	return ret, err
 end
 
 -- Send datagrams (with yielding when not ready)
 local function nbsendto(sock, addr, buf, buflen)
-	local ret, err = sock:sendto(buf, buflen, 0, addr)
+	local ret, err = S.sendto(sock, buf, buflen, 0, addr)
 	while not ret do
 		if err.errno ~= c.E.AGAIN then break end
 		coroutine.yield(M.writers, sock)
-		ret, err = sock:sendto(buf, buflen, 0, addr)
+		ret, err = S.sendto(sock, buf, buflen, 0, addr)
 	end
 	return ret, err
 end
 
 -- Wrapper for asynchronous I/O
-local rcvbuf = ffi.new('char [?]', 4096)
 local function udpsend(sock, msg, msglen, addr)
 	if not msglen then msglen = #msg end
 	return addr and nbsendto(sock, addr, msg, msglen) or nbsend(sock, msg, msglen)
@@ -258,6 +270,9 @@ local function tcprecv(sock, buf, buflen)
 	return ret, err
 end
 local function connect(sock, addr, buf, buflen)
+	if type(addr) == 'string' then
+		addr, buf = getaddr(addr, buf), nil
+	end
 	local packed_msg = nil
 	if buf and addr and c.MSG.FASTOPEN then
 		-- Need to serialize data for first message (no writev support)
@@ -267,14 +282,14 @@ local function connect(sock, addr, buf, buflen)
 		txlen[0] = n16(tonumber(buflen))
 		ffi.copy(packed_msg + 2, buf, buflen)
 		-- Attempt TCP Fast Open (fallback if fails)
-		local ok, err = sock:sendto(packed_msg, buflen + 2, c.MSG.FASTOPEN, addr)
+		local ok, err = S.sendto(sock, packed_msg, buflen + 2, c.MSG.FASTOPEN, addr)
 		if ok then return ok end
 	end
-	local _, err = sock:connect(addr)
+	local _, err = S.connect(sock, addr)
 	if err and err.errno == c.E.INPROGRESS then
 		coroutine.yield(M.writers, sock)
 	end
-	assert(sock:getpeername(), 'failed to connect')
+	assert(S.getpeername(sock), 'failed to connect')
 	if buf then -- Send data after connecting (assume TFO failed)
 		if packed_msg then -- Reuse already serialized message
 			return nbsend(sock, packed_msg, buflen + 2)
@@ -318,10 +333,14 @@ local function resume(curlist, fd)
 	if not ok or not what then
 		M.coroutines = M.coroutines - 1
 		M.pollfd:del(fd, curlist == M.writers)
-		return false, nextlist
+		return false, nextlist, co
 	end
 	-- Transfer ownerwhip to a different waitlist
-	if type(what) ~= 'number' then what = what:getfd() end
+	if not what then
+		what = -1
+	elseif type(what) ~= 'number' then
+		what = what:getfd()
+	end
 	enqueue(nextlist or M.readers, co, what)
 	-- Stop listening for current operation if the coroutine changed
 	if fd ~= what or curlist ~= nextlist then
@@ -333,40 +352,51 @@ end
 
 local function start(closure, ...)
 	if not closure then return nil end
+	-- If maximum number of coroutines is reached, execute in parent
+	if M.max_coroutines and M.coroutines >= M.max_coroutines then
+		return pcall(closure, ...)
+	end
 	-- Coroutine resume transfers ownership to return socket
 	local co = coroutine.create(closure)
 	local ok, list, what = coroutine.resume(co, ...)
-	if not ok or not what then
-		return ok, list
+	if not ok then
+		return ok, list, co
 	end
 	M.coroutines = M.coroutines + 1
-	if type(what) ~= 'number' then what = what:getfd() end
+	if not what then
+		what = -1
+	elseif type(what) ~= 'number' then
+		what = what:getfd()
+	end
 	enqueue(list or M.readers, co, what)
-	assert(M.pollfd:add(what, list == M.writers))
+	-- Poll if waitable is socket
+	if what > 0 then
+		assert(M.pollfd:add(what, list == M.writers))
+	end
 	return co
 end
 
 local function step(timeout)
-	local pollfd, ok, err, count = M.pollfd, true, nil, 0
+	local pollfd, ok, err, co, count = M.pollfd, true, nil, nil, 0
 	for _, ev in pollfd:get(timeout) do
 		-- Stop listening when error is encountered
 		if pollfd.eof(ev) then
 			if M.writers[ev.fd] then
-				ok, err = resume(M.writers, ev.fd)
+				ok, err, co = resume(M.writers, ev.fd)
 				table.clear(M.writers[ev.fd])
 			end
 			if M.readers[ev.fd] then
-				ok, err = resume(M.readers, ev.fd)
+				ok, err, co = resume(M.readers, ev.fd)
 				table.clear(M.writers[ev.fd])
 			end
 		-- Process write events
 		elseif pollfd.eout(ev) then
 			count = count + 1
-			ok, err = resume(M.writers, ev.fd)
+			ok, err, co = resume(M.writers, ev.fd)
 		-- Process read events
 		elseif pollfd.ein(ev) then
 			count = count + 1
-			ok, err = resume(M.readers, ev.fd)
+			ok, err, co = resume(M.readers, ev.fd)
 		end
 		if err then break else ok = true end
 	end
@@ -376,11 +406,11 @@ local function step(timeout)
 		for i, t in ipairs(M.timeouts) do
 			if now >= t[1] then
 				table.remove(M.timeouts, i)
-				ok, err = resume(M.readers, t[2])
+				ok, err, co = resume(M.readers, t[2])
 			end
 		end
 	end
-	return ok, err
+	return ok, err, co
 end
 
 -- Compose module interface
@@ -389,17 +419,22 @@ M.socket = getsocket
 M.now = gettime
 M.go  = start
 M.step, M.block = step, block
+M.nbsend, M.nbrecv = nbsend, nbrecv
 M.udpsend, M.tcpsend = udpsend, tcpsend
 M.udprecv, M.tcprecv = udprecv, tcprecv
 M.connect = connect
 M.accept = accept
 -- Run until there are coroutines to execute
 M.run = function (timeout)
-	local ok, err = true
+	local ok, err, co = true
 	while ok and M.coroutines > 0 do
-		ok, err = step(timeout)
+		ok, err, co = step(timeout)
 	end
-	return ok, err
+	return ok, err, co
+end
+-- Set maximum concurrency
+function M.concurrency(c)
+	M.max_coroutines = c
 end
 
 return setmetatable(M, {

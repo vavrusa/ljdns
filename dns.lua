@@ -75,10 +75,6 @@ typedef struct {
 	uint64_t last_signed;
 	uint8_t digest[64]; /* Max size of the HMAC-SHA512 */
 } tsig_t;
-/* libc */
-void *malloc(size_t len);
-void free(void *ptr);
-int memcmp(const void *a, const void *b, size_t len);
 /* descriptors */
 const char *knot_strerror(int code);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
@@ -333,6 +329,7 @@ ffi.metatype( knot_dname_t, {
 		end,
 		within = function(dname, parent)
 			assert(ffi.istype(knot_dname_t, dname))
+			assert(parent ~= nil)
 			if ffi.istype(knot_dname_t, parent) then parent = parent.bytes end
 			return knot.knot_dname_in(ffi.cast(u8_p, parent), dname.bytes)
 		end,
@@ -354,16 +351,26 @@ ffi.metatype( knot_dname_t, {
 			assert(ffi.istype(knot_dname_t, dname))
 			assert(dname.bytes ~= nil)
 			return ffi.string(knot.knot_dname_to_str(dname_buf, dname.bytes, 255))
-		end
+		end,
+		split = function(dname)
+			assert(ffi.istype(knot_dname_t, dname))
+			assert(dname.bytes ~= nil)
+			local t, p, i = {}, dname.bytes, 0
+			while p[i] ~= 0 do
+				table.insert(t, ffi.string(p + i + 1, p[i]))
+				i = i + p[i] + 1
+			end
+			return t
+		end,
 	},
 })
 
 -- RDATA parser
-local rrparser = require('dns.rrparser')
+local rrparser = require('dns.rrparser').new()
 local function rd_parse (rdata_str)
-	local parser = rrparser.new()
-	if parser:parse('. 0 IN '..rdata_str..'\n') then
-		return ffi.string(parser.r_data, parser.r_data_length)
+	rrparser:reset()
+	if rrparser:parse(string.format('. 0 IN %s\n', rdata_str)) then
+		return ffi.string(rrparser.r_data, rrparser.r_data_length)
 	else return nil end
 end
 
@@ -373,10 +380,28 @@ local rdata = {
 	-- Selected types / pure parsers
 	a = function (rdata_str) return rd_parse('A '..rdata_str) end,
 	aaaa = function (rdata_str) return rd_parse('AAAA '..rdata_str) end,
-	mx = function (rdata_str) return rd_parse('MX '..rdata_str) end,
 	soa = function (rdata_str) return rd_parse('SOA '..rdata_str) end,
 	ns = function (rdata_str) return rd_parse('NS '..rdata_str) end,
 	txt = function (rdata_str) return rd_parse('TXT '..rdata_str) end,
+	srv = function (priority, port, weight, target)
+		local wire = ffi.new('char [?]', 3 * ffi.sizeof('uint16_t') + target:len())
+		local p = ffi.cast(u16_p, wire)
+		p[0] = n16(priority)
+		p[1] = n16(port)
+		p[2] = n16(weight)
+		ffi.copy(p + 3, target.bytes, target:len())
+		return wire
+	end,
+	mx = function (priority, target)
+		if type(priority) == 'string' then
+			return rd_parse('MX '..priority)
+		end
+		local wire = ffi.new('char [?]', ffi.sizeof('uint16_t') + target:len())
+		local p = ffi.cast(u16_p, wire)
+		p[0] = n16(priority)
+		ffi.copy(p + 1, target.bytes, target:len())
+		return wire
+	end,
 	-- RDATA disection routines (extensible)
 	soa_primary_ns = function(rdata)
 		rdata = ffi.cast(u8_p, rdata)
@@ -491,7 +516,7 @@ ffi.metatype( knot_rrset_t, {
 			if rr.rdcount > 0 then
 				copy.rdcount = rr.rdcount
 				local rdlen = utils.rdsetlen(rr)
-				copy.raw_data = ffi.C.malloc(rdlen)
+				copy.raw_data = ffi.C.calloc(1, rdlen)
 				assert(copy.raw_data ~= nil)
 				ffi.copy(copy.raw_data, rr.raw_data, rdlen)
 			end
@@ -541,7 +566,7 @@ local function edns_payload(rr, val)
 	if val ~= nil then rr.raw_class = val end
 	return rr:class()
 end
-local function edns_do(rr, val)
+local function edns_do(rr, val, raw)
 	if rr == nil then return end
 	local ttl = rr:ttl()
 	if val ~= nil then
@@ -549,6 +574,10 @@ local function edns_do(rr, val)
 		rr:ttl(ttl)
 	end
 	return bit.band(ttl, 0x8000) ~= 0
+end
+local function edns_flags(rr)
+	if rr == nil then return 0 end
+	return rr:ttl()
 end
 local function edns_option(rr, code, val)
 	if val ~= nil then knot.knot_edns_add_option(rr, code, #val, val, nil) end
@@ -575,7 +604,7 @@ end
 local function pktsection_iter(t, i)
 	i = i + 1
 	if i >= t.count then return end
-	return i, t[i]
+	return i, t[i][0]
 end
 ffi.metatype(ffi.typeof('knot_pktsection_t'), {
 	__len = function (t) return t.count end,
@@ -937,6 +966,7 @@ local M = {
 		version = edns_version,
 		payload = edns_payload,
 		dobit = edns_do,
+		flags = edns_flags,
 		option = edns_option,
 	},
 	tsig = tsig_t,

@@ -12,20 +12,20 @@ if not table.clear then
 end
 
 -- Return DLL extension
-function utils.dll_versioned(lib, ver)
+function utils.libname(lib, ver)
 	assert(jit)
 	local fmt = {
-		Windows = '%s.%s.dll',
-		Linux = '%s.so.%s', BSD = '%s.so.%s', POSIX = '%s.so.%s', Other = '%s.so.%s',
-		OSX = '%s.%s.dylib'
+		Windows = '%s%s.dll',
+		Linux = '%s.so%s', BSD = '%s.so%s', POSIX = '%s.so%s', Other = '%s.so%s',
+		OSX = '%s%s.dylib'
 	}
-	return string.format(fmt[jit.os], lib, ver)
+	return string.format(fmt[jit.os], lib, ver and ('.'..ver) or '')
 end
 
 -- Return versioned C library
 function utils.clib(soname, versions)
 	for _, v in pairs(versions) do
-		local ok, lib = pcall(ffi.load, utils.dll_versioned(soname, tostring(v)))
+		local ok, lib = pcall(ffi.load, utils.libname(soname, tostring(v)))
 		if ok then return lib end
 	end
 end
@@ -46,6 +46,12 @@ end
 local knot = utils.clib('libknot', {2,3})
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
+/* libc */
+char *strdup(const char *s);
+void *calloc(size_t nmemb, size_t size);
+void free(void *ptr);
+int memcmp(const void *a, const void *b, size_t len);
+/* helper library */
 unsigned mtime(const char *path);
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
 typedef uint8_t knot_rdata_t;
@@ -178,6 +184,14 @@ utils.dnamecmp = dnamecmp
 utils.dnamecmpraw = cutil.dnamecmp
 utils.mtime = cutil.mtime
 
+-- Reverse table
+function utils.reverse(t)
+	local len = #t
+	for i=1, math.floor(len / 2) do
+		t[i], t[len - i + 1] = t[len - i + 1], t[i]
+	end
+end
+
 -- Sort FFI array (0-indexed) using bottom-up heapsort based on GSL-shell [1]
 -- Selection-based sorts work better for this workload, as swaps are more expensive
 -- [1]: https://github.com/franko/gsl-shell
@@ -297,6 +311,7 @@ utils.searchkey = searchkey
 local _, S = pcall(require, 'syscall')
 if S then
 	utils.chdir = S.chdir
+	utils.mkdir = S.mkdir
 end
 
 return utils

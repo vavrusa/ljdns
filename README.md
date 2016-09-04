@@ -77,6 +77,8 @@ The library provides a handful of useful functions over domain names, use string
 ```lua
 -- Count domain name labels
 dname:labels()
+-- Explode domain name labels
+assert.same(dname:split(), {'example', 'com'})
 -- Covert to lowercase
 print(dname:lower())
 -- Checks if dname is a child of parent
@@ -300,7 +302,7 @@ assert(tsig_client:verify(answer))
 
 ### DNSSEC
 
-The library provides an API to do online signing and verification of records. For that it needs ZSK (zone signing key). You can load private keys from PEM format, and public keys (for verification) from either DNSKEY RDATA or PEM.
+The library provides an API for online signing and verification of records. For that it needs zone signing key (ZSK) and preferably key signing key (KSK) if you don't plan to use the key forever. KSK can be the same key as ZSK, but that will make rollovers more error prone and complicated. You can load private keys from PEM, and public keys (for verification) from either DNSKEY RDATA or PEM.
 
 ```lua
 local dnssec = require('dns.dnssec')
@@ -365,6 +367,67 @@ local owner = dns.dname('\7example')
 local nsec = dnssec.denial(owner, dns.type.A)
 -- Names that do not exist are simplified, as only NSEC and RRSIG can exist
 local nsec = dnssec.denial(owner, dns.type.A, true)
+```
+
+### DNSSEC KASP
+
+The difficult thing about DNSSEC is key management. At each point in time there must be a trust chain from trust anchor to record signatures with the respect to DNS caching. To ensure this, an operator must perform a "key rollover" in which the current signing key is replaced with a new one in several steps. The library provides an API to automate this process by defining and enforcing key and signing policies (KASP).
+
+The KASP information is stored on disk and is persistent. It stores information about key timing and references to keystores, but not private key information.
+
+```lua
+-- Create a new KASP
+local kasp = dnssec.kasp('/var/kasp')
+-- Create a signing policy
+local policy = kasp:policy('ecdsa', {
+	algorithm = 'ecdsa_p256_sha256',
+})
+-- Create a keyset with name 'example'
+local keyset = kasp:keyset('example', {
+	policy = 'ecdsa',
+})
+-- Perform key rollover in coroutine
+go(function ()
+	local time, action
+	while true do
+		local now = os.time()
+		local time, action = keyset:plan(now)
+		print('next action at', time, dnssec.tostring.action[action])
+		go.block(nil, time - now) -- Wait until the event time
+		keyset:action(action, time)
+	end
+end
+-- Use active key for signing records
+local zsk = keyset:zsk()
+local signer, err = dnssec.signer(key)
+```
+
+You can recover or change signing policy and keysets if you have created them beforehand. The information in KASP is persistent, so you can continue rollover even if you restart the application.
+
+```lua
+-- Open KASP and recover keyset
+local kasp = dnssec.kasp('/var/kasp')
+local keyset = kasp:policy('example')
+```
+
+You can also change policy defaults, or use different PKCS8/PKCS11 key storage.
+
+```lua
+-- Open PKCS11 keystore (softhsm)
+local keystore, err = kasp:keystore('softhsm', {
+	backend = 'pkcs11',
+	config = 'pkcs11:token=dnssec;pin-value=1234 /usr/local/lib/softhsm2.so'
+})
+-- Generate some keys manually with existing policy
+local ksk, key_id = keys:generate(policy, true)
+local keyset, err = kasp:keyset('example', {
+	policy = 'ecdsa',
+})
+-- Set policy to use this PKCS11 keystore
+local policy = kasp:keystore('example_pkcs11', {
+	algorithm = 'ecdsa_p256_sha256',
+	keystore = 'softhsm',
+})
 ```
 
 ### Caveats
@@ -607,7 +670,7 @@ search: 5416827 ops/sec
 
 This means it parsed and loaded a zone with million records into memory under 2 seconds, and is able to perform over 1.5M lookups per second over sorted set, and 5.4M lookups per second with LMDB.
 
-## Asynchronous I/O
+## Non-blocking I/O
 
 The library comes with easy asynchronous socket I/O and scoped coroutines, this means you can write sequential code and get free concurrency when coroutine would block instead. As the coroutines are
 scoped, you can nest coroutines and tie their lifetime to sockets they block on.
