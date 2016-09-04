@@ -2,6 +2,7 @@ local ffi = require('ffi')
 local utils = require('dns.utils')
 local dns = require('dns')
 local lib = utils.clib('dnssec', {2})
+assert(lib, 'libdnssec not found, install libknot >= 2.3.0')
 
 ffi.cdef [[
 /* crypto.h */

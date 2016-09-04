@@ -407,7 +407,7 @@ You can recover or change signing policy and keysets if you have created them be
 ```lua
 -- Open KASP and recover keyset
 local kasp = dnssec.kasp('/var/kasp')
-local keyset = kasp:policy('example')
+local keyset = kasp:keyset('example')
 ```
 
 You can also change policy defaults, or use different PKCS8/PKCS11 key storage.
@@ -424,7 +424,7 @@ local keyset, err = kasp:keyset('example', {
 	policy = 'ecdsa',
 })
 -- Set policy to use this PKCS11 keystore
-local policy = kasp:keystore('example_pkcs11', {
+local policy = kasp:policy('example_pkcs11', {
 	algorithm = 'ecdsa_p256_sha256',
 	keystore = 'softhsm',
 })
