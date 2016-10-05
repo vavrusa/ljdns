@@ -1,4 +1,6 @@
 describe('utils', function()
+
+	local ffi = require('ffi')
 	local dns, utils = require('dns'), require('dns.utils')
 
 	it('compares domain names canonically', function ()
@@ -34,5 +36,13 @@ describe('utils', function()
 		-- Test malformed input
 		ip = utils.inaddr('abc')
 		assert.falsy(ip)
+	end)
+
+	it('hashes strings', function ()
+		local str = 'test hash functions'
+		local a, b = utils.hash32(str), utils.hash32(str)
+		assert.same(utils.hash32(str), utils.hash32(str), 'same 32-bit hash for same input')
+		local a, b = ffi.string(utils.hash128(str), 16), ffi.string(utils.hash128(str), 16)
+		assert.same(a, b, 'same 128-bit hash for same input')
 	end)
 end)

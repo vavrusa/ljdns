@@ -21,8 +21,8 @@ check: $(addsuffix .test,$(OBJS))
 	@luacheck --codes --formatter TAP . --exclude-files *.test.lua warp/config.lua warp/vendor
 clean:
 	$(RM) $(CLIB)
-$(CLIB): src/utils.c
-	$(CC) $(CFLAGS) -shared $< -o $(CLIB)
+$(CLIB): src/utils.c src/murmurhash3.c
+	$(CC) $(CFLAGS) -shared $^ -o $(CLIB)
 install:
 	$(INSTALL) -d $(PREFIX_LMOD)/dns
 	$(INSTALL) $(EXTRA) $(PREFIX_LMOD)/dns

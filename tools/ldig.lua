@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 local kdns = require('dns')
 -- Parse parameters
-local host, port, tcp, tls, xfer, key = nil, 53, false, false, false, nil
+local host, port, tcp, tls, xfer, key, cookie = nil, 53, false, false, false, nil
 local version, dobit, bufsize, short, multi = 0, false, nil, false
 local qname, qtype, qclass = '.', kdns.type.NS, kdns.class.IN
 local flags = {'rd'}
@@ -49,6 +49,8 @@ local k = 1 while k <= #arg do
 	elseif v == '+tls' then
 		tls, tcp = true, true
 		if port == 53 then port = 853 end
+	elseif v:find('+cookie',1) then
+		cookie = v:match('+cookie=(%S+)') or true
 	elseif v == '+cd' then table.insert(flags, 'cd')
 	elseif v == '+do' or v == '+dnssec' then dobit = true
 	elseif v == '-h' or v == '--help' then
@@ -102,11 +104,24 @@ for _,q in ipairs(planned) do
 	local query = kdns.packet(512)
 	for _,flag in ipairs(flags) do query[flag](query, true) end
 	query:question(kdns.dname.parse(q[1]), q[2], q[3])
-	if dobit or (bufsize ~= nil and bufsize > 0) then
+	if dobit or (bufsize ~= nil and bufsize > 0) or cookie then
 		if bufsize == nil then bufsize = 4096 end
 		query:begin(kdns.section.ADDITIONAL)
 		local rr = kdns.edns.rrset(version, bufsize)
 		kdns.edns.dobit(rr, dobit)
+		if cookie then
+			local client = cookie
+			-- Unpack cookie from hexstring
+			if type(client) == 'string' then
+				local hex = ''
+				cookie:gsub('%w%w', function (c) hex = hex .. string.char(tonumber(c, 16)) end)
+				client = hex
+			-- Generate new client cookie
+			else
+				client = io.open('/dev/urandom', 'r'):read(8)
+			end
+			kdns.edns.option(rr, kdns.option.COOKIE, client)
+		end
 		query:put(rr)
 	end
 	if key ~= nil then

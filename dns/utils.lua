@@ -3,6 +3,7 @@ local ffi = require('ffi')
 local bit = require('bit')
 
 -- Compatibility with older LJ that doesn't have table.clear()
+local ok = pcall(require, 'table.clear')
 if not table.clear then
 	table.clear = function (t)  -- luacheck: ignore
 		for i, _ in ipairs(t) do
@@ -42,6 +43,11 @@ function utils.hexdump(buf)
 	end
 end
 
+-- Parse host/port string
+function utils.addrparse(s)
+	return s:match '([^#]+)', tonumber(s:match '#(%d+)$') or 53
+end
+
 -- FFI + C code
 local knot = utils.clib('libknot', {2,3})
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
@@ -54,11 +60,20 @@ int memcmp(const void *a, const void *b, size_t len);
 /* helper library */
 unsigned mtime(const char *path);
 int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
+int dnamekey(uint8_t *restrict dst, const uint8_t *restrict src);
+unsigned bucket(unsigned l);
+/* libknot */
 typedef uint8_t knot_rdata_t;
 uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
 uint8_t *knot_rdata_data(const knot_rdata_t *rr);
 size_t knot_rdata_array_size(uint16_t size);
+/* murmurhash3 */
+void MurmurHash3_x86_32  ( const void * key, int len, uint32_t seed, void * out );
+void MurmurHash3_x64_128 ( const void * key, int len, uint32_t seed, void * out );
 ]]
+
+-- Latency bucket
+utils.bucket = cutil.bucket
 
 -- Byte order conversions
 local rshift,band = bit.rshift,bit.band
@@ -70,6 +85,16 @@ if ffi.abi('le') then
 end
 utils.n32 = n32
 utils.n16 = n16
+
+-- Compute RDATA set count
+local function rdsetcount(rr, maxlen)
+	local p, len, count = rr.raw_data, 0, 0
+	while len < maxlen do
+		len = len + knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
+		count = count + 1
+	end
+	return count
+end
 
 -- Compute RDATA set length
 local function rdsetlen(rr)
@@ -112,7 +137,7 @@ local function dnamelenraw(dname)
 	return i + 1 -- Add label count
 end
 local function dnamelen(dname)
-	return dnamelenraw(dname.bytes)
+	return (dnamelenraw(dname.bytes))
 end
 
 -- Canonically compare domain wire name / keys
@@ -169,12 +194,9 @@ end
 utils.wire_reader=wire_reader
 
 -- Export low level accessors
-utils.rdlen = function (rdata)
-	return knot.knot_rdata_rdlen(rdata)
-end
-utils.rddata = function (rdata)
-	return knot.knot_rdata_data(rdata)
-end
+utils.rdlen = knot.knot_rdata_rdlen
+utils.rddata = knot.knot_rdata_data
+utils.rdsetcount = rdsetcount
 utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
 utils.rdataiter = rdataiter
@@ -183,6 +205,13 @@ utils.dnamelenraw = dnamelenraw
 utils.dnamecmp = dnamecmp
 utils.dnamecmpraw = cutil.dnamecmp
 utils.mtime = cutil.mtime
+
+-- Inverse table
+function utils.itable(t, tolower)
+	local it = {}
+	for k,v in pairs(t) do it[v] = tolower and string.lower(k) or k end
+	return it
+end
 
 -- Reverse table
 function utils.reverse(t)
@@ -298,23 +327,57 @@ end
 -- Search key representing owner/type pair
 -- format: { u8 name [1-255], u16 type }
 local function searchkey(owner, type, buf)
-	local nlen = dnamelen(owner)
-	if not buf then buf = ffi.new('char [?]', nlen + 3) end
-	ffi.copy(buf, owner.bytes, nlen + 1)
-	buf[nlen + 1] = bit.rshift(bit.band(type, 0xff00), 8)
-	buf[nlen + 2] = bit.band(type, 0x00ff)
-	return buf, nlen + 3
+	if not buf then
+		buf = ffi.new('char [?]', dnamelen(owner) + 2)
+	end
+	-- Convert to lookup format (reversed, label length zeroed)
+	local nlen = cutil.dnamekey(buf, ffi.cast('void *', owner))
+	-- Write down record type
+	buf[nlen] = bit.rshift(bit.band(type, 0xff00), 8)
+	buf[nlen + 1] = bit.band(type, 0x00ff)
+	return buf, nlen + 2
 end
 utils.searchkey = searchkey
+
+
+-- Reseed from pseudorandom pool
+do
+	local pool = io.open('/dev/urandom', 'r')
+	local s = ffi.new('uint64_t [1]', os.clock())
+	local v = pool:read(ffi.sizeof(s))
+	pool:close()
+	ffi.copy(s, v, #v)
+	math.randomseed(tonumber(s[0]))
+end
+
+-- Return non-cryptographic hash of a string
+local seed, h32tmp = math.random(0, 0xffffffff), ffi.new('uint32_t [1]')
+utils.hash32 = function (data, len)
+	len = len or #data
+	cutil.MurmurHash3_x86_32(ffi.cast('void *', data), len, seed, h32tmp)
+	return h32tmp[0]
+end
+
+utils.hash128 = function (data, len, dst)
+	dst = dst or ffi.new('char [16]')
+	len = len or #data
+	cutil.MurmurHash3_x64_128(ffi.cast('void *', data), len, seed, dst)
+	return dst
+end
 
 -- Export basic OS operations
 local _, S = pcall(require, 'syscall')
 if S then
 	utils.chdir = S.chdir
 	utils.mkdir = S.mkdir
+	utils.isdir = function (path)
+		local st, err = S.lstat(path)
+		if not st then return nil, err end
+		return st.isdir
+	end
 	local ip4, ip6 = S.t.sockaddr_in(), S.t.sockaddr_in6()
-	utils.inaddr = function (addr, port)
-		local n = #addr
+	utils.inaddr = function (addr, port, n)
+		n = n or #addr
 		port = port or 0
 		if n == 4 then
 			ip4.port = port
@@ -325,6 +388,9 @@ if S then
 			ffi.copy(ip6.sin6_addr, addr, n)
 			return ip6
 		end
+	end
+	utils.ls = function (path)
+		return S.util.dirtable(path, true)
 	end
 end
 

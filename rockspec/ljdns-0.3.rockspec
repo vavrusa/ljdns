@@ -44,7 +44,7 @@ build = {
     ["dns.tls"] = "dns/tls.lua",
     ["dns.dnssec"] = "dns/dnssec.lua",
     dns = "dns.lua",
-    kdns_clib = "src/utils.c",
+    kdns_clib = { "src/utils.c", "src/murmurhash3.c" },
   }
 }
 rockspec_format = "1.1"

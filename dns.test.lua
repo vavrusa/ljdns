@@ -1,19 +1,5 @@
 local dns = require('dns')
 
--- Test constants
-assert(dns.class.IN == 1)
-assert(dns.class['IN'] == 1)
-assert(dns.tostring.class[1] == 'IN')
-assert(dns.tostring.class[666666] == nil)
-assert(dns.type.NS == 2)
-assert(dns.tostring.type[2] == 'NS')
-assert(dns.rcode.SERVFAIL == 2)
-assert(dns.tostring.rcode[2] == 'SERVFAIL')
-assert(dns.opcode.QUERY == 0)
-assert(dns.tostring.opcode[0] == 'QUERY')
-collectgarbage()
-print('[ OK ] dns.constants')
-
 -- Test domain names
 local dname = dns.dname('\7example\3com')
 assert(dname ~= nil)
@@ -73,8 +59,9 @@ assert(dns.edns.version(opt) == 0)
 assert(dns.edns.payload(opt) == 4096)
 assert(dns.edns.dobit(opt) == false)
 assert(dns.edns.dobit(opt, true) == true)
-assert(dns.edns.option(opt, 0x05) == false)
+assert(dns.edns.has(opt, 0x05) == false)
 assert(dns.edns.option(opt, 0x05, 'rawraw') == true)
+assert(dns.edns.option(opt, 0x05) == 'rawraw')
 collectgarbage()
 print('[ OK ] dns.edns')
 

@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <time.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
@@ -47,6 +49,28 @@ int dnamecmp(const uint8_t *lhs, const uint8_t *rhs)
 	return lp - rp;
 }
 
+int dnamekey(uint8_t *restrict dst, const uint8_t *restrict src)
+{
+	if (!dst || !src) {
+		return 0;
+	}
+	/* Count length to last label */
+	size_t len = 0;
+	while (src[len] > 0) {
+		len += src[len] + 1;
+	}
+	/* Write labels from back to get reversed order */
+	size_t r = 0;
+	while (src[r] > 0) { /* Until empty label */
+		const uint8_t rlen = src[r] + 1;
+		dst[len - 1] = 0x00; /* Zero label length */
+		len -= rlen; /* Base for label start */
+		memcpy(dst + len, src + r + 1, rlen - 1);
+		r += rlen;
+	}
+	return r;
+}
+
 /* Fetch file last modified time. */
 unsigned mtime(const char *path)
 {
@@ -55,4 +79,20 @@ unsigned mtime(const char *path)
 		return s.st_mtime;
 	}
 	return 0;
+}
+
+/* Return time bracket.
+ * @note moved to C because it's unpredictably branchy.
+ */
+unsigned bucket(unsigned l)
+{
+	if      (l <= 1)    return 1;
+	else if (l <= 10)   return 10;
+	else if (l <= 50)   return 50;
+	else if (l <= 100)  return 100;
+	else if (l <= 250)  return 250;
+	else if (l <= 500)  return 500;
+	else if (l <= 1000) return 1000;
+	else if (l <= 1500) return 1500;
+	return 3000;
 }

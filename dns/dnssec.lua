@@ -205,11 +205,6 @@ local function getsetattr(key, get, set, val)
 	end
 	return get(key)
 end
-local function itable(t)
-	local it = {}
-	for k,v in pairs(t) do it[v] = string.lower(k) end
-	return it
-end
 
 -- RDATA digest size for given algorithm
 local algorithms = {
@@ -247,9 +242,9 @@ local M = {
 	action = keyaction,
 	state = keystate,
 	tostring = {
-		algo = itable(algorithms),
-		action = itable(keyaction),
-		state = itable(keystate),
+		algo = utils.itable(algorithms),
+		action = utils.itable(keyaction),
+		state = utils.itable(keystate),
 	}
 }
 

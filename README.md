@@ -37,6 +37,7 @@ print(dns.type.AAAA)
 print(dns.opcode.IQUERY)
 print(dns.rcode.NXDOMAIN)
 print(dns.section.ANSWER)
+print(dns.option.COOKIE)
 ```
 
 ## RR types
@@ -54,6 +55,11 @@ print(dns.tostring.type[2]) -- "NS"
 print(dns.tostring.type[1]) -- "A"
 -- Convert custom type to string
 print(dns.tostring.type[55555]) -- "TYPE55555"
+-- Check if type is a meta type
+print(dns.type.ismeta(dns.type.A))
+false
+print(dns.type.ismeta(dns.type.AXFR))
+true
 ```
 
 ## Domain names
@@ -276,7 +282,10 @@ if pkt.opt ~= nil then
 	local rr = pkt.opt
 	print(dns.edns.version(rr), dns.edns.dobit(rr))
 	-- Check if it contains EDNS OPT code
-	if dns.edns.option(rr, 0x05) then print('yes, has 0x5 option') end
+	if dns.edns.has(rr, dns.option.COOKIE) then print('yes, has cookie') end
+	-- Set and get an EDNS option
+	dns.edns.option(dns.option.COOKIE, 'abcdefgh')
+	assert(dns.edns.option(dns.option.COOKIE) == 'abcdefgh')
 end
 ```
 
@@ -388,7 +397,6 @@ local keyset = kasp:keyset('example', {
 })
 -- Perform key rollover in coroutine
 go(function ()
-	local time, action
 	while true do
 		local now = os.time()
 		local time, action = keyset:plan(now)
@@ -396,7 +404,7 @@ go(function ()
 		go.block(nil, time - now) -- Wait until the event time
 		keyset:action(action, time)
 	end
-end
+end)
 -- Use active key for signing records
 local zsk = keyset:zsk()
 local signer, err = dnssec.signer(key)
