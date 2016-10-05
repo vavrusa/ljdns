@@ -239,8 +239,9 @@ assert(tostring(txn:get('test')) == 'val', 'lmdb: get')
 txn:abort()
 txn = assert(env:txn(db))
 -- Test low-level key/value API
-local key = lmdb.val_t(4, 'abcd')
-local val = lmdb.val_t(4, 'efgh')
+local key, val = 'abcd', 'efgh'
+local key = lmdb.val_t(4, ffi.cast('void *', key))
+local val = lmdb.val_t(4, ffi.cast('void *', val))
 assert(txn:put(key, val), 'lmdb: put #2')
 local has = lmdb.val_t()
 assert(txn:get(key, has), 'lmdb: get #2')

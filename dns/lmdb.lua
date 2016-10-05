@@ -186,7 +186,7 @@ local mdb_cursor_op = {
 }
 
 -- Export module
-local M = {}
+local M = {op = mdb_cursor_op}
 
 -- Helpers
 local function mdb_error(ret)
@@ -196,10 +196,6 @@ end
 -- Metatype for MDB key/value
 local mdb_val_t = ffi.typeof('struct MDB_val')
 ffi.metatype(mdb_val_t, {
-    __new = function (ct, len, data)
-        if not len then return ffi.new(ct) end
-        return ffi.new(ct, len, ffi.cast('void *', data))
-    end,
     __tostring = function (self)
         return ffi.string(self.data, self.size)
     end,
@@ -222,18 +218,31 @@ ffi.metatype(mdb_cursor_t, {
                 t.c = nil
             end
         end,
-        next = function (t, k, v)
+        next = function (t, k, v, op)
             assert(t.c ~= nil, 'cursor operation on dead cursor')
-            local op
             if k then
-                op = mdb_cursor_op.NEXT
+                op = op or mdb_cursor_op.NEXT
             else
                 k = mdb_val_t()
-                op = mdb_cursor_op.FIRST
+                op = op or mdb_cursor_op.FIRST
             end
             -- Set cursor to next iteration
-            v = v or mdb_val_t()            
+            v = v or mdb_val_t()        
             local ret = lmdb.mdb_cursor_get(t.c, k, v, op)
+            if ret == lmdb.MDB_NOTFOUND then
+                return nil
+            elseif ret ~= 0 then
+                return mdb_error(ret)
+            end
+            return k, v
+        end,
+        prev = function (t, k, v)
+            return t:next(k, v, mdb_cursor_op.PREV)
+        end,
+        seek = function (t, k, v, op)
+            assert(t.c ~= nil, 'cursor operation on dead cursor')
+            v = v or mdb_val_t()
+            local ret = lmdb.mdb_cursor_get(t.c, k, v, op or mdb_cursor_op.SET_RANGE)
             if ret == lmdb.MDB_NOTFOUND then
                 return nil
             elseif ret ~= 0 then
@@ -280,8 +289,8 @@ ffi.metatype(mdb_txn_t, {
         end,
         put = function (t, key, val, flags)
             assert(t.valid, 'operation on aborted transaction')
-            if type(key) == 'string' then key = mdb_val_t(#key, key) end
-            if type(val) == 'string' then val = mdb_val_t(#val, val) end
+            if not ffi.istype(mdb_val_t, key) then key = mdb_val_t(#key, ffi.cast('void *', key)) end
+            if not ffi.istype(mdb_val_t, val) then val = mdb_val_t(#val, ffi.cast('void *', val)) end
             local ret = lmdb.mdb_put(t.txn, t.dbi, key, val, mdb_put_flags[flags or 0])
             if ret == lmdb.MDB_KEYEXIST then
                 return false
@@ -292,7 +301,7 @@ ffi.metatype(mdb_txn_t, {
         end,
         get = function (t, key, val)
             assert(t.valid, 'operation on aborted transaction')
-            if type(key) == 'string' then key = mdb_val_t(#key, key) end
+            if type(key) == 'string' then key = mdb_val_t(#key, ffi.cast('void *', key)) end
             if not val then val =  mdb_val_t() end
             local ret = lmdb.mdb_get(t.txn, t.dbi, key, val)
             if ret == lmdb.MDB_NOTFOUND then
@@ -304,7 +313,7 @@ ffi.metatype(mdb_txn_t, {
         end,
         del = function (t, key, val)
             assert(t.valid, 'operation on aborted transaction')
-            if type(key) == 'string' then key = mdb_val_t(#key, key) end
+            if type(key) == 'string' then key = mdb_val_t(#key, ffi.cast('void *', key)) end
             if not val then val =  mdb_val_t() end
             local ret = lmdb.mdb_del(t.txn, t.dbi, key, val)
             if ret ~= 0 then return mdb_error(ret) end
@@ -323,9 +332,7 @@ ffi.metatype(mdb_txn_t, {
 local mdb_env_t = ffi.typeof('struct mdb_envref_t')
 ffi.metatype(mdb_env_t, {
     __gc = function(t)
-        if t.env ~= nil then
-            lmdb.mdb_env_close(t.env)
-        end
+        t:close()
     end,
     __index = {
         path = function (t)
@@ -356,6 +363,12 @@ ffi.metatype(mdb_env_t, {
             if ret ~= 0 then return mdb_error(ret) end
             txn.dbi = dbi[0]
             return txn, dbi[0]
+        end,
+        close = function (t)
+            if t.env ~= nil then
+                lmdb.mdb_env_close(t.env)
+                t.env = nil
+            end
         end,
         stat = function (t)
             local stat = ffi.new('MDB_stat [1]')
