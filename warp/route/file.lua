@@ -16,6 +16,14 @@ local function add_rr(req, writer, rr)
 end
 -- Find appropriate zonefile and mtime for this query
 local function zone_get(self, name)
+	-- Check if limited to a single zone
+	if self.zone then
+		if not name:within(self.zone) then
+			return name:tostring(), 0
+		end
+		return self.path, 1
+	end
+	-- Find zone file in given directory
 	local zonefile = name:tostring() .. 'zone'
 	if zonefile:find('/', 1, true) then
 		zonefile = zonefile:gsub('/','_')
@@ -36,7 +44,7 @@ end
 local function serve(self, req, writer)
 	-- Check if already answered
 	if req.answer:aa() then return end
-	local name = req.query:qname()
+	local name = req.qname
 	local zonefile, mtime = zone_get(self, name)
 	if mtime == 0 then
 		req:vlog('%s: refused (no zone found)', zonefile)
@@ -45,11 +53,10 @@ local function serve(self, req, writer)
 	end
 	req.file_path = zonefile
 	req.file_mtime = mtime
-	local name = req.query:qname()
 	-- Note: rrset is going to contain unsafe owner to avoid allocation on every RR (expensive)
 	--       we use custom GC routine to not attempt to free unsafe owner
 	if not req.file_parser then req.file_parser = assert(rrparser.new()) end
-	if not req.rr then req.file_rr = ffi.gc(dns.rrset(nil, 0), dns.rrset.clear) end
+	if not req.file_rr then req.file_rr = ffi.gc(dns.rrset(nil, 0), dns.rrset.clear) end
 	req.answer:aa(true)
 	req.answer:rd(false)
 	req.answer:rcode(dns.rcode.NXDOMAIN)
@@ -93,6 +100,7 @@ local function serve(self, req, writer)
 		if not soa and rr:type() == dns.type.SOA then
 			soa = rr:copy()
 			soa:add(parser.r_data, parser.r_ttl, parser.r_data_length)
+			req:vlog('%s: found soa %s', req.file_path, soa:tostring(0))
 		end
 	end
 	parser:reset()
@@ -105,8 +113,7 @@ local function serve(self, req, writer)
 		end
 		req.soa = soa
 	end
-	req:vlog('%s: stream end (%d records, %d messages, %d msec)',
-	     req.file_path, nrrs, npkts, (os.time() - req.now) * 1000.0)
+	req:vlog('%s: stream end (%d records, %d messages)', req.file_path, nrrs, npkts)
 	return not req.xfer, nil
 end
 
@@ -114,7 +121,14 @@ end
 function M.init(conf)
 	conf = conf or {}
 	conf.path = conf.path or '.'
-	conf.path = conf.path .. '/'
+	-- Check if given path is file or directory
+	if not dns.utils.isdir(conf.path) then
+		conf.zone = conf.zone or conf.path:match '.+/(%w+)'
+		conf.zone = dns.dname.parse(conf.zone)
+		assert(conf.zone, string.format('file "%s" has unknown zone, provide file.zone = <name>', conf.path))
+	else
+		conf.path = conf.path .. '/'
+	end
 	conf.serve = serve
 	return conf
 end

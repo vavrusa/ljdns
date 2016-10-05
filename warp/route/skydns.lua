@@ -1,7 +1,6 @@
 local ffi, dns, utils = require('ffi'), require('dns'), require('dns.utils')
-local json = require('cjson')
-local http = require('resty.http')
 local getaddr, af = require('dns.nbio').addr, require('syscall').c.AF
+local json = require('cjson')
 
 local M = {}
 
@@ -93,7 +92,7 @@ local function gethost(req, k, v, family, rrtype, self)
 		rr:add(target.bytes, v.ttl, target:len())
 		req.answer:put(rr)
 		if not self.zone or target:within(self.zone) then
-			M.answer(self, req, http.new(), target, rrtype)
+			M.answer(self, req, self.store:txn(), target, rrtype)
 			return
 		end
 		-- NYI: Follow and flatten CNAMEs
@@ -153,7 +152,7 @@ local generators = {
 	end,
 }
 
-local function answer(self, req, c, name, rrtype)
+local function answer(self, req, txn, name, rrtype)
 	-- SOA query is synthesised
 	if rrtype == dns.type.SOA then
 		local soa = getsoa(req, self.zone)
@@ -168,30 +167,23 @@ local function answer(self, req, c, name, rrtype)
 	local k = key(name)
 	-- NS records have special namespace
 	if rrtype == dns.type.NS then k = k .. '/dns/ns' end
-	local ok, err = c:connect(self.conf.host, self.conf.port)
-	if not ok then error(err) end
-	local res, err = c:request {
-		path = self.conf.url:format(k),
-	}
-	-- Check response and serve
-	if err or res.status ~= 200 or not res.has_body then
-		res = res or {status=500, reason=err}
+	local v, err = self.store:get(txn, k)
+	if not v then
 		req.answer:rcode(dns.rcode.SERVFAIL)
-		req:vlog('etcd url: %s code: %d reason: %s', self.conf.url .. k, res.status, res.reason)
+		req:vlog('skydns key: %s error: %s', k, err)
 		return nil, err
 	end
-	local body = res:read_body()
-	-- Generate CoreDNS response
-	return addrecords(self, req, name, body, generators[rrtype])
+	-- Generate response
+	return addrecords(self, req, name, v, generators[rrtype])
 end
 M.answer = answer
 
 local function serve(self, req)
 	if req.nocache or req.xfer or req.answer:aa() then return end
-	local qname, qtype = req.query:qname(), req.query:qtype()
+	local qname, qtype = req.qname, req.qtype
 	if self.zone and not qname:within(self.zone) then return end
 	-- Answer type
-	local ok, err = answer(self, req, http.new(), qname, qtype)
+	local ok, err = answer(self, req, self.store:txn(), qname, qtype)
 	if not ok then
 		req:log('error', 'etcd: %s', err)
 	else
@@ -203,16 +195,13 @@ end
 function M.init(conf)
 	conf = conf or {}
 	conf.schema = conf.schema or 'http'
+	conf.store = conf.store or 'etcd'
 	conf.prefix = conf.prefix or '/skydns'
-	conf.host = conf.host or '127.0.0.1'
-	conf.port = conf.port or 2379
-	conf.timeout = conf.timeout or 100
-	conf.url = '/v2/keys' .. conf.prefix .. '/%s?recursive=true'
-	if conf.host:find '/' then
-		conf.port = nil
-	end
-
-	return {zone=dns.dname.parse(conf.zone), conf=conf, serve=serve}
+	conf.zone = dns.dname.parse(conf.zone)
+	assert(conf.zone, 'skydns.zone is missing, example: skydns.zone = "skydns.local"')
+	-- Open with selected KV store
+	local store = require('warp.store.' .. conf.store).init(conf)
+	return {zone=conf.zone, store=store, conf=conf, serve=serve}
 end
 
 return M

@@ -1,5 +1,6 @@
+local ffi = require('ffi')
 local dns = require('dns')
-local gettime = os.time
+local gettime = require('dns.nbio').now
 
 -- Logging code
 local function log(req, level, msg, ...)
@@ -33,6 +34,7 @@ local M = {
 	stats = stats, latency = latency,
 	-- Routes
 	routes = {},
+	hosts = {},
 }
 
 -- Pooled objects
@@ -77,6 +79,7 @@ function M.request(sock, addr, tcp)
 	req.sock, req.addr = sock, addr
 	req.log, req.vlog = M.log, M.vlog
 	req.is_tcp = tcp
+	req.session = nil
 	return req
 end
 
@@ -93,21 +96,29 @@ local function log_answer(req)
 	-- Log by options
 	if dns.edns.dobit(req.opt) then stats.dnssec = stats.dnssec + 1 end
 	-- Log latency breakdown
-	local lat = gettime() - req.now
-	if     lat <= 0.001 then latency[1] = latency[1] + 1
-	elseif lat <= 0.010 then latency[10] = latency[10] + 1
-	elseif lat <= 0.050 then latency[50] = latency[50] + 1
-	elseif lat <= 0.100 then latency[100] = latency[100] + 1
-	elseif lat <= 0.250 then latency[250] = latency[250] + 1
-	elseif lat <= 0.500 then latency[500] = latency[500] + 1
-	elseif lat <= 1.000 then latency[1000] = latency[1500] + 1
-	elseif lat <= 1.500 then latency[1500] = latency[1500] + 1
-	else                     latency[3000] = latency[3000] + 1
+	local lat = (gettime() - req.now) * 1000
+	local bucket = dns.utils.bucket(lat)
+	latency[bucket] = latency[bucket] + 1
+	req:vlog('answered as %s, %.02fms', rcode, lat)
+end
+
+-- Find route for received query
+local function getroute(req, qname, iface)
+	if not iface then
+		return M.routes.default
+	else
+		local route, p = nil, qname.bytes
+		for _ = 1, qname:labels() do
+			route = iface.match[ffi.string(p)]
+			if route then break end
+			p = p + (p[0] + 1)
+		end
+		return route
 	end
 end
 
 -- Parse message, then answer to client
-function M.serve(req, writer)
+function M.serve(req, writer, iface)
 	if not req.query:parse() then
 		stats.dropped = stats.dropped + 1
 		error('query parse error')
@@ -119,61 +130,117 @@ function M.serve(req, writer)
 	else
 		stats.udp = stats.udp + 1
 	end
-	local qtype = req.query:qtype()
+	local qname, qtype = req.query:qname(), req.query:qtype()
+	-- Find best route for query
+	local route = getroute(req, qname, iface)
 	-- Set request meta
+	local answer = req.answer
 	req.xfer = (qtype == dns.type.AXFR or qtype == dns.type.IXFR)
+	req.qname, req.qtype = qname, qtype
 	req.soa = nil
 	req.nocache = false
 	req.now = gettime()
 	req.stats = stats
-	req.query:toanswer(req.answer)
-	-- Copy OPT if present in query
-	local opt = req.query.opt
-	if opt ~= nil then
-		local payload = math.min(dns.edns.payload(opt), M.bufsize)
-		-- Reuse to save memory allocations
-		if req.optbuf then
-			req.opt = req.optbuf
-			dns.edns.init(req.opt, 0, payload)
+	req.query:toanswer(answer)
+	-- Answer request if it's routable
+	if route then
+		local opt = req.query.opt
+		if opt ~= nil then -- Copy OPT if present in query
+			local payload = math.min(dns.edns.payload(opt), M.bufsize)
+			-- Reuse to save memory allocations
+			if req.optbuf then
+				req.opt = req.optbuf
+				dns.edns.init(req.opt, 0, payload)
+			else
+				req.opt = dns.edns.rrset(0, payload)
+			end
+			req.answer.opt = req.opt
+		end
+		-- Do not process transfers over UDP
+		if req.xfer and not req.is_tcp then
+			req:vlog('zone transfer over udp, rejected')
+			answer:tc(true)
 		else
-			req.opt = dns.edns.rrset(0, payload)
+			route.serve(req, writer)
 		end
-	end
-	-- Do not process transfers over UDP
-	if req.xfer and not req.is_tcp then
-		req.answer:tc(true)
+		-- Add authority and additionals
+		answer:begin(dns.section.AUTHORITY)
+		for _, rr in ipairs(req.authority) do answer:put(rr, true) end
+		answer:begin(dns.section.ADDITIONAL)
+		for _, rr in ipairs(req.additional) do answer:put(rr, true) end
+		-- Run complete handlers
+		route.complete(req)
 	else
-		for _, r in ipairs(M.routes[1]) do
-			if r:serve(req, writer) == false then break end
-		end
-	end
-	-- Add authority and additionals
-	req.answer:begin(dns.section.AUTHORITY)
-	for _, rr in ipairs(req.authority) do req.answer:put(rr, true) end
-	req.answer:begin(dns.section.ADDITIONAL)
-	for _, rr in ipairs(req.additional) do req.answer:put(rr, true) end
-	-- Run complete handlers
-	for _, r in ipairs(M.routes[1]) do
-		if r.complete then r:complete(req) end
+		answer:rcode(dns.rcode.REFUSED)
 	end
 	log_answer(req)
+	-- Drop the empty answers
+	if answer.size == 0 then
+		recycle(req)
+		return
+	end
 	-- Serialize OPT if present
 	if req.opt then
-		req.answer:put(req.opt, true)
+		answer:put(req.opt, true)
 		req.optbuf, req.opt = req.opt, nil
 	end
 	-- Finalize answer and stream it
-	writer(req, req.answer)
+	writer(req, answer)
 	recycle(req)
 end
 
 -- Form route
-function M.route(zone, t)
-	if type(zone) == 'table' and not t then
-		t, zone = zone, 1
+function M.route(name, t)
+	if type(name) == 'table' and not t then
+		t, name = name, 'default'
 	end
-	M.routes[zone] = t
+	-- Compile callback closures
+	local serve, complete = function () return true end, function () end
+	for _,r in ipairs(t) do
+		-- serve() terminates if it returns false, otherwise it's chained
+		if r.serve then
+			local prev = serve
+			serve = function (a, b) return prev(a, b) and r:serve(a, b) ~= false end
+		end
+		-- complete() is chained
+		if r.complete then
+			local prev = complete
+			complete = function (a) prev(a) r:complete(a) end
+		end
+	end
+	M.routes[name] = {name=name, route=t, serve=serve, complete=complete}
 	return M
+end
+
+-- Form listen rule
+function M.listen(host, t, o)
+	if not host then host, t = '::#53', host end
+	o = o or {}
+	-- Parse scheme, hostname and port
+	local scheme = host:match '^(%S+)://'
+	if scheme then
+		host = host:sub(#scheme + 4)
+	end
+	scheme = scheme or 'dns'
+	local host, port = dns.utils.addrparse(host)
+	-- Build routing table
+	local tree, match = {}, {}
+	assert(type(t) == 'table', 'expected listen([name,]{ ... })')
+	for r,v in pairs(t) do
+		for _,f in ipairs(v) do
+			if type(f) == 'string' then
+				f = assert(dns.dname.parse(f), 'invalid domain name: '..f)
+				f = f:lower()
+				local key = f:towire():sub(1, #f - 1)
+				match[key] = M.routes[r]
+			end
+			table.insert(tree, f)
+		end
+	end
+	-- Create new interface
+	local interface = {host=host, port=port, scheme=scheme, opt=o, tree=tree, match=match}
+	table.insert(M.hosts, interface)
+	return interface
 end
 
 function M.conf(conf)
@@ -184,10 +251,11 @@ function M.conf(conf)
 			return nil, conf
 		end
 	end
-	local env = {conf = M, route = M.route}
+	local env = {conf = M, route = M.route, listen = M.listen}
 	env = setmetatable(env, {
 		__index = function (t,k)
 			local v = rawget(t, k) or _G[k]
+			-- Implicit global: route type
 			if not v then
 				v = require('warp.route')[k]
 				if v then v = v.init end

@@ -22,6 +22,8 @@ Options:
   +short    print only answer records
   +cd       DNSSEC checking disabled
   +do       request DNSSEC records
+  +cookie   request DNS cookie
+  +cookie=x pass DNS cookie
 Examples:
   ldig	-x 192.168.1.1
   ldig	NS cz +do

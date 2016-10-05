@@ -131,6 +131,9 @@ local tcp_t = {
 function ngx.socket.tcp()
 	return setmetatable({}, {__index=tcp_t})
 end
+function ngx.socket.udp()
+	return setmetatable({}, {__index=tcp_t}) -- Reuse
+end
 
 -- NGINX request API
 ngx.req.socket = ngx.socket.tcp
@@ -153,6 +156,7 @@ end
 
 -- Connector to jail environment
 M.env = env
+M.ngx = ngx
 
 -- Load compatibility module
 function M.require(pkg, modenv)

@@ -5,7 +5,7 @@ local M = {}
 -- Sign records in the answer
 local function serve(self, req, writer)
 	-- Act only within zone and for non-meta types
-	local qname = req.query:qname()
+	local qname = req.qname
 	if req.xfer or not qname:within(self.zone) then return end
 
 	-- Empty zone, NXDOMAIN
