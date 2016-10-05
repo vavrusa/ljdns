@@ -118,8 +118,7 @@ int gnutls_certificate_set_x509_system_trust(gnutls_certificate_credentials_t cr
 
 ffi.metatype('tls_session_t', {
     __gc = function (self)
-        gnutls.gnutls_deinit(self.session[0])
-        S.close(self.fd)
+        self:close()
     end,
     __index = {
         getfd = function (self)
@@ -134,9 +133,18 @@ ffi.metatype('tls_session_t', {
         recv = function (self, buf, buflen)
             buf = ffi.cast('char *', buf)
             local ret = gnutls.gnutls_record_recv(self.session[0], buf, buflen)
-            if ret == err.AGAIN then return nil, S.t.error(c.E.AGAIN) end -- Map EAGAIN code
+            if ret == err.AGAIN then return nil, c.E.AGAIN end -- Map EAGAIN code
             if ret < 0 then return nil, {errno=c.E.IO, strerr=gnutls.gnutls_strerror(ret)} end
             return ret
+        end,
+        getpeername = function (self)
+            return S.getpeername(self.fd)
+        end,
+        close = function (self)
+            if self.fd < 0 then return end
+            gnutls.gnutls_deinit(self.session[0])
+            S.close(self.fd)
+            self.fd = -1
         end,
     }
 })
