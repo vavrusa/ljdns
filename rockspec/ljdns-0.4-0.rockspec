@@ -1,5 +1,5 @@
 package = "ljdns"
-version = "0.3-1"
+version = "0.4-0"
 source = {
    url = "git://github.com/vavrusa/ljdns"
 }
