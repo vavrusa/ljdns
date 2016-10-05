@@ -1,14 +1,12 @@
 # Warp
 
-Warp is a DNS router that chains various DNS services together. It allows you to build server combining load-balancer, proxy and authoritative server in one package. Or caching recursive server. Or an edge-side DNS filter. It runs either in NGINX [OpenResty][openresty] or stand-alone.
+Warp is a DNS router that chains various DNS services together. It allows you to build server combining load-balancer, proxy and authoritative server in one package. Or caching recursive server. Or an edge-side DNS filter. It runs either stand-alone, or atop NGINX / [OpenResty][openresty] to leverage its non-blocking I/O, good performance, and familiarity with its operations.
 
-Instead of building another application server, Warp can live on top of existing server - such as NGINX, and leverage its nonblocking I/O, good performance, and operational familiarity.
-
-Unlike load balancers, it also provides cutting-edge DNS features, such as RFC7873 DNS Cookies, Response Rate Limiting, DNS-over-TLS, TCP pipelining, out-of-order processing, and long-lived connections for proxying. It also allows running performance-critical application logic directly on edge, to e.g. serve "hot" zones directly, and proxy others.
+Unlike pure load balancers, it provides cutting-edge DNS features, such as RFC7873 DNS Cookies, Response Rate Limiting, DNS-over-TLS, TCP pipelining, out-of-order processing, and long-lived connections for proxying. It also allows running performance-critical application logic directly on edge, to e.g. serve "hot" zones directly, and proxy others.
 
 Unlike middleware servers, it has good performance and advanced load-balancing features (traffic shaping, RTT tracking, weighted origin pools, shunting of abuse traffic).
 
-Warp is somewhere in between - it's able to replace either of those, however its purpose is to keep your existing infrastructure in place, and supercharge it.
+Warp is somewhere in between - able to replace either of those, or supercharge an existing DNS infrastructure with modern DNS features and filtering.
 
 ## Installation
 
@@ -75,6 +73,7 @@ ACME
 ## Routes
 
 Similarly to [CoreDNS][coredns], it allows you to write middleware without worrying about the logistics. It's just called "routes", and represents things you can do with the DNS messages.
+You can chain these routes, which makes the server versatile.
 
 These routes are available:
 
@@ -88,22 +87,14 @@ These routes are available:
 * route/cookie - implements [RFC7873][rfc-cookies] DNS cookies
 * route/secondary - DNS secondary service syncing to backing store (zone files or primary)
 
-### route/dnssec
-### route/file
-### route/lru
-### route/prometheus
-### route/rrl
-### route/skydns
-### route/whoami
-### route/cookie
-
 ## Examples
 
 TBD
 
 [openresty]: http://openresty.org
 [coredns]: https://github.com/miekg/coredns
-[dnsdist]: https://dnsdist.io
+[dnsdist]: https://dnsdist.org
 [skydns]: https://github.com/skynetservices/skydns#service-announcements
 [stream-lua]: https://github.com/vavrusa/stream-lua-nginx-module/blob/bloody-dns-server/lua/dns_server.lua
 [rfc-cookies]: https://tools.ietf.org/html/rfc7873
+[ljdns]: https://github.com/vavrusa/ljdns
