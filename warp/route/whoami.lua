@@ -23,6 +23,7 @@ local function serve(self, req, writer)
 		           :add(dns.rdata.txt(addr))
 		req.answer:put(rr, true)
 		req.nocache = true
+		return false
 	end
 end
 

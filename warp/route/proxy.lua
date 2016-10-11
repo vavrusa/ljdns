@@ -1,11 +1,13 @@
 local dns, nbio = require('dns'), require('dns.nbio')
 
-local M = {max_pool = 100}
+local M = {max_pool = 256}
 
 -- Protocol transports
 local proto = { tcp = 1, udp = 2, unix = 3, }
 -- Tracking timestamp
-local track_ts = 1
+local track_ts, expire_ts = 1, 1
+-- Rate limit tracking
+local rate = 0
 -- Origin selection algorithm
 local method = {
 	-- Round robin selection
@@ -122,6 +124,10 @@ local function rescan(req, pkt, bytes)
 		for _, rr in ipairs(pkt:section(s)) do
 			if not dns.type.ismeta(rr:type()) then
 				table.insert(dst, rr)
+				-- Remember SOA to establish authority
+				if rr:type() == dns.type.SOA then
+					req.soa = rr
+				end
 			end
 		end
 	end
@@ -145,6 +151,19 @@ local function serve(self, req)
 	req.answer:clear()
 	table.clear(req.authority)
 	table.clear(req.additional)
+	-- Check rate limit
+	if self.rate then
+		if expire_ts < req.now then
+			rate, expire_ts = self.rate, req.now + 1
+		else
+			if rate == 0 then
+				req.query:toanswer(req.answer)
+				req.answer:rcode(dns.rcode.SERVFAIL)
+				return false
+			end
+			rate = rate - 1
+		end
+	end
 	-- Establish connection
 	local now, bytes, err = nbio.now(), 0
 	for _ = 1, 3 do

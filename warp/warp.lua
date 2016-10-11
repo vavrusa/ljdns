@@ -16,7 +16,7 @@ local function writer_tcp(req, msg)
 end
 
 -- TCP can pipeline multiple queries in single connection
-local function read_tcp(sock, tls)
+local function read_tcp(sock, routemap)
 	local addr, queries, co = sock:getpeername(), 0
 	while true do
 		local req = warp.request(sock, addr, true)
@@ -27,7 +27,7 @@ local function read_tcp(sock, tls)
 		-- Spawn off new coroutine for request
 		if queries > 0 then req.sock = sock:dup() end
 		req.query.size = ok
-		ok, err, co = go(warp.serve, req, writer_tcp)
+		ok, err, co = go(warp.serve, req, writer_tcp, routemap)
 		if not ok then req:log('error', '%s, %s', err, debug.traceback(co)) end
 		queries = queries + 1
 	end
@@ -36,7 +36,7 @@ local function read_tcp(sock, tls)
 end
 
 -- Bind to sockets and start serving
-local function udp(host, port, route)
+local function udp(host, port, iface)
 	-- Create bound sockets
 	local msg, addr = string.format('udp "%s#%d: ', host, port), go.addr(host, port)
 	local udp, err = go.socket(addr)
@@ -50,14 +50,14 @@ local function udp(host, port, route)
 			ok, err = go.udprecv(udp, req.query.wire, req.query.max_size, addr)
 			if ok then
 				req.query.size = ok
-				ok, err, co = go(warp.serve, req, writer_udp, route)
+				ok, err, co = go(warp.serve, req, writer_udp, iface.match)
 			end
 			if err then req:log('error', '%s, %s', err, debug.traceback(co)) end
 		end
 	end)
 end
 
-local function tcp(host, port, route)
+local function tcp(host, port, iface)
 	-- Create bound sockets
 	local msg, addr = string.format('tcp "%s#%d: ', host, port), go.addr(host, port)
 	local tcp, err = go.socket(addr, true)
@@ -66,60 +66,65 @@ local function tcp(host, port, route)
 	go(function ()
 		local addr, ok, err = tcp:getsockname(), 0
 		while ok do
-			ok, err = go(read_tcp, go.accept(tcp))
+			ok, err = go(read_tcp, go.accept(tcp), iface.match)
 			if err then warp.log({addr=addr}, 'error', tostring(err)) end
 		end
 	end)
 end
 
-local function tls(host, port, route)
+local function tls(host, port, iface)
 	-- Create bound sockets
 	local msg, addr = string.format('tls "%s#%d: ', host, port), go.addr(host, port)
 	local tcp, err = go.socket(addr, true)
 	if not tcp then error(msg .. err) end
 	-- Open X.509 credentials and create TLS connection upgrade closure
 	local tls = require('dns.tls')
-	local cred, err = tls.creds.x509(route.opt)
+	local cred, err = tls.creds.x509(iface.opt)
 	if not cred then error(msg .. err) end
-	local function read_tls(sock)
+	local function read_tls(sock, routemap)
 		sock = assert(tls.server(sock, cred))
-		return read_tcp(sock)
+		return read_tcp(sock, routemap)
 	end
 	warp.vlog(nil, msg .. 'listening')
 	go(function ()
 		local addr, ok, err = tcp:getsockname(), 0
 		while ok do
-			ok, err = go(read_tls, go.accept(tcp))
+			ok, err = go(read_tls, go.accept(tcp), iface.match)
 			if err then warp.log({addr=addr}, 'error', tostring(err)) end
 		end
 	end)
 end
 
--- Listen on HTTP for metrics
-local prometheus = require('warp.route.prometheus').init()
-
-local function write_http(req, msg, ctype)
+local function write_http(req, msg, code, ctype)
 	ctype = ctype or 'application/json'
-	local tpl = 'HTTP/1.0 200 OK\nContent-Length: %d\nContent-Type: %s\n\n%s'
-	req.sock:send(tpl:format(#msg, ctype, msg))
+	code = code or '200 OK'
+	local tpl = 'HTTP/1.0 %s\nContent-Length: %d\nContent-Type: %s\n\n%s'
+	req.sock:send(tpl:format(code, #msg, ctype, msg))
 end
 
-local function read_http(sock)
+local function read_http(sock, req, route)
 	local addr = sock:getpeername()
-	local ok, err = pcall(prometheus.serve, prometheus, {sock=sock}, write_http)
-	if not ok then warp.log(nil, 'error', err) end
+	req.sock, req.addr = sock, addr
+	-- TODO: worry about partial header reads
+	local headers = req.sock:read()
+	if headers then
+		req.method, req.url, req.proto = headers:match('(%S+)%s(%S+)%s([^\n]+)')
+		-- Serve API call
+		local ok, err = pcall(warp.api, req, write_http, route)
+		if not ok then warp.log({addr=addr}, 'error', err) end
+	end
 	sock:close()
 end
 
-local function http(host, port)
+local function http(host, port, iface)
 	local msg, addr = string.format('interface "%s#%d: ', host, port), go.addr(host, port)
 	local tcp, err = go.socket(addr, true)
 	if not tcp then error(msg..err) end
-	warp.vlog(nil, msg .. 'serving metrics')
 	go(function ()
 		local addr, ok, err = tcp:getsockname(), 0
 		while ok do
-			ok, err = go(read_http, go.accept(tcp))
+			local req = {}
+			ok, err = go(read_http, go.accept(tcp), req, iface.match)
 			if err then warp.log({addr=addr}, 'error', tostring(err)) end
 		end
 	end)
@@ -130,10 +135,10 @@ local function help()
 	print('Options:')
 	print('\t-h,--help        ... print this help')
 	print('\t-v               ... verbose logging')
-	print('\t-m <addr>[#port] ... serve metrics on address/port (e.g. ::1#8080)')
 end
 
 -- Parse arguments and start serving
+-- go(function()
 local k = 1 while k <= #arg do
 	local v = arg[k]
 	local chr = string.char(v:byte())
@@ -143,11 +148,8 @@ local k = 1 while k <= #arg do
 	elseif v == '-h' or v == '--help' then
 		help()
 		return 0
-	elseif v == '-m' then
-		v, k = arg[k + 1], k + 1
-		http(v:match '([^#]+)', tonumber(v:match '#(%d+)$') or 8080)
 	else
-		warp.conf(v)
+		assert(warp.conf(v))
 	end
 	k = k + 1
 end
@@ -158,15 +160,18 @@ for _,iface in ipairs(warp.hosts) do
 		tcp(iface.host, iface.port, iface)
 	elseif iface.scheme == 'tls' then
 		tls(iface.host, iface.port, iface)
+	elseif iface.scheme == 'http' then
+		http(iface.host, iface.port or 8080, iface)
 	else
 		error('unknown downstream scheme: ' .. iface.scheme)
 	end
 end
+-- end)
 
 -- Enable trace stitching
 require('jit.opt').start('minstitch=2')
 -- Limit the number of in-flight requests
-go.concurrency(100)
+go.concurrency(256)
 -- Run coroutines
 while true do
 	local ok, err, co = go.run(1)

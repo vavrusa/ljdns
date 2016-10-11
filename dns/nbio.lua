@@ -19,7 +19,6 @@ local M = {
 	coroutines = 0,
 	readers = {},
 	writers = {},
-	timeouts = {},
 }
 
 local nbsend, nbsendv, nbrecv, nbsendto, nbrecvfrom
@@ -273,6 +272,7 @@ if S.epoll_create then
 		eof = function(ev) return ev.HUP or ev.ERR or ev.RDHUP end,
 		ein = function(ev) return bit.band(ev.events, c.EPOLL.IN) ~= 0 end,
 		eout = function(ev) return bit.band(ev.events, c.EPOLL.OUT) ~= 0 end,
+		timer = function(ev) return false end, -- NYI
 	}
 elseif S.kqueue then
 	poll = {
@@ -298,9 +298,19 @@ elseif S.kqueue then
 		get = function(p, timeout)
 			return p.fd:kevent(nil, p.events, timeout)
 		end,
+		arm = function (p, timeout, fd)
+			local ev = p.event.kev[0]
+			ev.signal = 0
+			ev.fd = fd or 0
+			ev.setfilter = c.EVFILT.TIMER
+			ev.setflags = c.EV.ADD + c.EV.ONESHOT
+			ev.data = timeout
+			return p.fd:kevent(p.event, nil)
+		end,
 		eof = function(ev) return ev.EOF or ev.ERROR end,
 		ein = function(ev) return ev.filter == c.EVFILT.READ end,
 		eout = function(ev) return ev.filter == c.EVFILT.WRITE end,
+		timer = function(ev) return ev.filter == c.EVFILT.TIMER end,
 	}
 else
 	error('no epoll or kqueue support')
@@ -515,10 +525,7 @@ end
 
 local function block(sock, timeout)
 	assert(sock)
-	coroutine.yield(M.readers, sock)
-	if timeout then
-		table.insert(M.timeouts, {gettime + timeout, sock})
-	end
+	coroutine.yield(M.readers, sock, timeout)
 end
 
 -- Transfer ownerwhip to a different waitlist
@@ -530,7 +537,9 @@ local function enqueue(waitlist, co, fd)
 	else
 		table.insert(queue, co)
 	end
-	assert(M.pollfd:add(fd, waitlist == M.writers))
+	if fd > -1 then
+		assert(M.pollfd:add(fd, waitlist == M.writers))
+	end
 end
 
 local function dequeue(waitlist, fd)
@@ -552,7 +561,7 @@ local function resume(curlist, fd)
 		M.coroutines = M.coroutines - 1
 		return resume(curlist, fd)
 	end
-	local ok, nextlist, nextfd = coroutine.resume(co)
+	local ok, nextlist, nextfd, deadline = coroutine.resume(co)
 	if not ok or not nextfd then
 		M.coroutines = M.coroutines - 1
 		dequeue(curlist, fd)
@@ -567,6 +576,10 @@ local function resume(curlist, fd)
 		dequeue(curlist, fd)
 		enqueue(nextlist, co, nextfd)
 	end
+	-- Set deadline
+	if deadline then
+		M.pollfd:arm(deadline, fd)
+	end
 	return true
 end
 
@@ -578,7 +591,7 @@ local function start(closure, ...)
 	end
 	-- Coroutine resume transfers ownership to return socket
 	local co = coroutine.create(closure)
-	local ok, list, fd = coroutine.resume(co, ...)
+	local ok, list, fd, deadline = coroutine.resume(co, ...)
 	if not ok or not fd then
 		return ok, list, co
 	end
@@ -587,6 +600,10 @@ local function start(closure, ...)
 	end
 	enqueue(list, co, fd)
 	M.coroutines = M.coroutines + 1
+	-- Set deadline
+	if deadline then
+		M.pollfd:arm(deadline, fd)
+	end
 	return co
 end
 
@@ -608,21 +625,11 @@ local function step(timeout)
 			count = count + 1
 			ok, err, co = resume(M.writers, ev.fd)
 		-- Process read events
-		elseif pollfd.ein(ev) then
+		elseif pollfd.ein(ev) or pollfd.timer(ev) then
 			count = count + 1
 			ok, err, co = resume(M.readers, ev.fd)
 		end
 		if err then break else ok = true end
-	end
-	-- Expire timeouts
-	if M.timeouts[1] then
-		local now = gettime()
-		for i, t in ipairs(M.timeouts) do
-			if now >= t[1] then
-				table.remove(M.timeouts, i)
-				ok, err, co = resume(M.readers, t[2])
-			end
-		end
 	end
 	return ok, err, co
 end

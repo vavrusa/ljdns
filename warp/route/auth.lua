@@ -1,9 +1,9 @@
-local dns, rrparser = require('dns'), require('dns.rrparser')
+local dns, rrparser, go = require('dns'), require('dns.rrparser'), require('dns.nbio')
 local now = require('dns.nbio').now
 local ffi = require('ffi')
 
 -- Pooled objects
-local cached_txn, cached_rr = nil, ffi.gc(dns.rrset(), dns.rrset.init)
+local txnpool, cached_rr = {}, ffi.gc(dns.rrset(), dns.rrset.init)
 
 local function log_event(msg, ...)
 	local log = require('warp.init').log
@@ -24,10 +24,8 @@ local function add_rr(req, writer, rr)
 	return 0
 end
 
-local function positive(self, req, writer, rr, txn)
-	rr = self.store:get(txn, req.qname, req.qtype, rr)
-	add_rr(req, writer, rr)
-	return 
+local function positive(self, req, writer, rr)
+	add_rr(req, writer, rr:copy())
 end
 
 local function negative(self, req, writer, rr, txn)
@@ -36,17 +34,23 @@ end
 
 local function answer(self, req, writer, rr, txn)
 	-- Find name encloser in given zone
-	local encloser, cut = self.store:encloser(txn, req.qname, req.soa, rr)
+	local match, cut, wildcard = self.store:match(txn, req.soa, req.qname, req.qtype, rr)
 	if cut then -- Name is below a zone cut
-		table.insert(req.authority, cut:copy())
-		-- TODO: fill glue records
+		cut = cut:copy()
+		table.insert(req.authority, cut)
+		self.store:addglue(txn, cut, rr, req.additional)
 		return
 	end
 	-- Zone is authoritative for this name
 	req.answer:aa(true)
-	-- Encloser is equal to QNAME
-	if req.qname:equals(encloser) then
-		return positive(self, req, writer, rr, txn)
+	-- Encloser equal to QNAME, or covered by a wildcard
+	if match then
+		local covered, owner = match:type(), match:owner()
+		if covered == req.qtype or covered == dns.type.CNAME then
+			if wildcard or req.qname:equals(owner) then
+				return positive(self, req, writer, match)
+			end
+		end
 	end
 	-- No match for given name
 	return negative(self, req, writer, rr)
@@ -54,12 +58,14 @@ end
 
 -- Answer query from zonefile
 local function serve(self, req, writer)
-	local txn = cached_txn
+	-- Do not proxy transfers
+	if req.xfer then return end
+	-- Fetch an r-o transaction
+	local txn = table.remove(txnpool)
 	if txn then
 		txn:renew()
 	else
 		txn = self.store:txn(true)
-		cached_txn = txn
 	end
 	-- Find zone apex for given name
 	local rr = cached_rr
@@ -68,12 +74,14 @@ local function serve(self, req, writer)
 		req:vlog('%s: refused (no zone found)', req.qname)
 		req.answer:rcode(dns.rcode.REFUSED)
 		txn:reset()
+		table.insert(txnpool, txn)
 		return -- No file to process, bail
 	end
 	-- Set zone authority and build answer
 	req.soa = soa:copy()
 	answer(self, req, writer, rr, txn)
 	txn:reset()
+	table.insert(txnpool, txn)
 	return
 end
 
@@ -98,7 +106,6 @@ local function sync_file(self, zone, path)
 		end
 	end
 	-- Start parsing the source file
-	collectgarbage()
 	local updated, deleted, start = 0, 0, now()
 	local rr = dns.rrset(nil, 0)
 	while parser:parse() do
@@ -132,7 +139,6 @@ local function sync_file(self, zone, path)
 		updated = updated + update(self.store, current_keys, txn, rr)
 	end
 	parser:reset()
-	collectgarbage()
 	-- Delete keys that do not exist in new version
 	if current_keys then
 		for k, _ in pairs(current_keys) do
@@ -154,9 +160,20 @@ local function sync(self)
 			local path = self.source .. '/' .. v
 			local zone = dns.dname.parse(v:match('(%S+).zone$'))
 			sync_file(self, zone, path)
+			collectgarbage()
 		end
 	end
 end
+
+-- Public API
+local api = {
+	sync = function(self, req, writer)
+		if req.method ~= 'POST' then
+			return nil, 501
+		end
+		sync(self)
+	end
+}
 
 -- Module initialiser
 function M.init(conf)
@@ -164,13 +181,20 @@ function M.init(conf)
 	conf.path = conf.path or '.'
 	conf.store = conf.store or 'lmdb'
 	-- Check if store is available and open it
-	local ok, store = pcall(require, 'warp.store.' .. conf.store)
+	local ok, store
+	if type(conf.store) == 'string' then
+		ok, store = pcall(require, 'warp.store.' .. conf.store)
+	else
+		ok, store = true, conf.store
+	end
 	assert(ok, string.format('store "%s" is not available: %s', conf.store, store))
 	conf.store = assert(store.open(conf))
 	-- Synchronise
 	sync(conf)
 	-- Route API
+	conf.name = 'auth'
 	conf.serve = serve
+	conf.api = api
 	return conf
 end
 

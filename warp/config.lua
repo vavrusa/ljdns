@@ -4,6 +4,7 @@ route {
 	file { path = 'zones/example.zone' },
 	dnssec { algorithm = 'ecdsa_p256_sha256' },
 	rrl { rate = 20 },
+	prometheus {},
 }
 
 route('skydns', {
@@ -11,14 +12,13 @@ route('skydns', {
 	skydns { zone = 'skydns.local' },
 })
 
-route('secondary', {
-	secondary { source = 'zones' },
+route('edge', {
+	auth { source = 'zones' },
 })
 
 route('recursive', {
 	cookie {},
 	lru {},
-	rrl { rate = 20 },
 	proxy {
 		origins = {'8.8.8.8#53', '8.8.4.4'},
 		weights = {10, 20},
@@ -26,6 +26,18 @@ route('recursive', {
 		proto = 'tcp',
 		poolsize = 4,
 	},
+	rrl { rate = 20 },
+})
+
+route('proxy', {
+	cookie {},
+	lru {},
+	proxy {
+		rate = 20,
+		origins = {'95.85.40.151', '2a03:b0c0:0:1010::c6:b001'},
+		proto = 'tcp',
+	},
+	rrl { rate = 20 },
 })
 
 listen('tls://127.0.0.1#53537', {
@@ -36,16 +48,24 @@ listen('tls://127.0.0.1#53537', {
 })
 
 listen('127.0.0.1#53535', {
-	default = {
-		'example',
-	},
+	-- route = {
+	-- 	'example',
+	-- },
 	skydns = {
 		'skydns.local'
 	},
 	recursive = {
 		'vavrusa.com'
 	},
-	secondary = {
-		'flags', 'nu', 'se', 'example.com'
+	edge = {
+		'flags', 'nu', 'se', 'example'
+	},
+	proxy = {
+		'udp53.rocks'
 	}
+})
+
+listen('http://127.0.0.1#8080', {
+	['edge.api'] = '/edge',
+	['route.api'] = '/api',
 })

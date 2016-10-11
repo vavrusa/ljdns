@@ -32,14 +32,15 @@ local by_qtype = {
 
 local function rclass(req)
 	local rcode = req.answer:rcode()
+	local soa = req.soa and req.soa:owner() or req.qname
 	-- Set class based on specific RCODE
 	if rcode == dns.rcode.NXDOMAIN then
-		return rc.NXDOMAIN, req.soa:owner()
+		return rc.NXDOMAIN, soa
 	elseif rcode ~= dns.rcode.NOERROR then
-		return rc.ERROR, req.soa:owner()
+		return rc.BAD, soa
 	end
 	if req.wildcard then
-		return rc.WILDCARD, req.soa:owner()
+		return rc.WILDCARD, soa
 	end
 	-- Class based on query type
 	local cls = by_qtype[req.qtype]

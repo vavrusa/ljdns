@@ -103,13 +103,13 @@ local function log_answer(req)
 end
 
 -- Find route for received query
-local function getroute(req, qname, iface)
-	if not iface then
-		return M.routes.default
+local function getroute(req, qname, routemap)
+	if not routemap then
+		return M.routes.route
 	else
 		local route, p = nil, qname.bytes
 		for _ = 1, qname:labels() do
-			route = iface.match[ffi.string(p)]
+			route = routemap[ffi.string(p)]
 			if route then break end
 			p = p + (p[0] + 1)
 		end
@@ -117,8 +117,8 @@ local function getroute(req, qname, iface)
 	end
 end
 
--- Parse message, then answer to client
-function M.serve(req, writer, iface)
+-- Serve a DNS request
+function M.serve(req, writer, routemap)
 	if not req.query:parse() then
 		stats.dropped = stats.dropped + 1
 		error('query parse error')
@@ -132,7 +132,7 @@ function M.serve(req, writer, iface)
 	end
 	local qname, qtype = req.query:qname(), req.query:qtype()
 	-- Find best route for query
-	local route = getroute(req, qname, iface)
+	local route = getroute(req, qname, routemap)
 	-- Set request meta
 	local answer = req.answer
 	req.xfer = (qtype == dns.type.AXFR or qtype == dns.type.IXFR)
@@ -189,13 +189,33 @@ function M.serve(req, writer, iface)
 	recycle(req)
 end
 
+-- Serve API call
+function M.api(req, writer, iface)
+	local route, step, endpoint, url = req.url:match('^(/[^/]+)/([^/]+)/([^/]+)(.*)')
+	if not route then
+		return writer(req, '', '404 No such API')
+	end
+	route = iface.match[route]
+	step = route.match[step]
+	if not step or not step.api[endpoint] then
+		return writer(req, '', '404 No such endpoint')
+	end
+	req.url = url
+	local ok, err = step.api[endpoint](step, req, writer)
+	if err then
+		return writer(req, '', err)
+	elseif ok ~= nil then
+		return writer(req, ok)
+	end
+end
+
 -- Form route
 function M.route(name, t)
 	if type(name) == 'table' and not t then
-		t, name = name, 'default'
+		t, name = name, 'route'
 	end
 	-- Compile callback closures
-	local serve, complete = function () return true end, function () end
+	local match, serve, complete = {}, function () return true end, function () end
 	for _,r in ipairs(t) do
 		-- serve() terminates if it returns false, otherwise it's chained
 		if r.serve then
@@ -207,14 +227,44 @@ function M.route(name, t)
 			local prev = complete
 			complete = function (a) prev(a) r:complete(a) end
 		end
+		if r.name then
+			match[r.name] = r
+		end
 	end
-	M.routes[name] = {name=name, route=t, serve=serve, complete=complete}
+	M.routes[name] = {name=name, route=t, serve=serve, complete=complete, match=match}
 	return M
+end
+
+-- Compose routes for query matches
+function M.match(t)
+	local match = {}
+	if type(t) == 'table' then
+		assert(type(t) == 'table', 'expected match { ... }')
+		for r,v in pairs(t) do
+			-- Separate APIs from routes
+			if r:match('%.api$') then
+				match[v] = M.routes[r:sub(1, #r - 4)]
+			else
+				for _,f in ipairs(v) do
+					if type(f) == 'string' then
+						f = assert(dns.dname.parse(f), 'invalid domain name: '..f)
+						f = f:lower()
+						local key = f:towire():sub(1, #f - 1)
+						match[key] = M.routes[r]
+					end
+				end
+			end
+		end
+	end
+	return match
 end
 
 -- Form listen rule
 function M.listen(host, t, o)
-	if not host then host, t = '::#53', host end
+	-- Default listen rule
+	if type(host) == 'table' then
+		host, t, o = '::#53', host, t
+	end
 	o = o or {}
 	-- Parse scheme, hostname and port
 	local scheme = host:match '^(%S+)://'
@@ -223,32 +273,20 @@ function M.listen(host, t, o)
 	end
 	scheme = scheme or 'dns'
 	local host, port = dns.utils.addrparse(host)
-	-- Build routing table
-	local tree, match = {}, {}
-	assert(type(t) == 'table', 'expected listen([name,]{ ... })')
-	for r,v in pairs(t) do
-		for _,f in ipairs(v) do
-			if type(f) == 'string' then
-				f = assert(dns.dname.parse(f), 'invalid domain name: '..f)
-				f = f:lower()
-				local key = f:towire():sub(1, #f - 1)
-				match[key] = M.routes[r]
-			end
-			table.insert(tree, f)
-		end
-	end
+	-- Build the application routing table
+	local match = M.match(t)
 	-- Create new interface
-	local interface = {host=host, port=port, scheme=scheme, opt=o, tree=tree, match=match}
+	local interface = {host=host, port=port, scheme=scheme, opt=o, match=match}
 	table.insert(M.hosts, interface)
 	return interface
 end
 
 function M.conf(conf)
-	local ok
+	local ok, err
 	if type(conf) ~= 'function' then
-		ok, conf = pcall(loadfile, conf)
+		ok, conf, err = pcall(loadfile, conf)
 		if not ok or not conf then
-			return nil, conf
+			return nil, err
 		end
 	end
 	local env = {conf = M, route = M.route, listen = M.listen}
@@ -265,6 +303,7 @@ function M.conf(conf)
 	})
 	setfenv(conf, env)
 	conf()
+	return true
 end
 
 return M
