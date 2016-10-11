@@ -63,10 +63,11 @@ int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
 int dnamekey(uint8_t *restrict dst, const uint8_t *restrict src);
 unsigned bucket(unsigned l);
 /* libknot */
-typedef uint8_t knot_rdata_t;
-uint16_t knot_rdata_rdlen(const knot_rdata_t *rr);
-uint8_t *knot_rdata_data(const knot_rdata_t *rr);
+typedef struct { uint8_t bytes[?]; } knot_rdata_t;
+uint16_t knot_rdata_rdlen(void *rr);
+uint8_t *knot_rdata_data(void *rr);
 size_t knot_rdata_array_size(uint16_t size);
+int knot_dname_size(const uint8_t *name);
 /* murmurhash3 */
 void MurmurHash3_x86_32  ( const void * key, int len, uint32_t seed, void * out );
 void MurmurHash3_x64_128 ( const void * key, int len, uint32_t seed, void * out );
@@ -88,7 +89,7 @@ utils.n16 = n16
 
 -- Compute RDATA set count
 local function rdsetcount(rr, maxlen)
-	local p, len, count = rr.raw_data, 0, 0
+	local p, len, count = rr.raw_data.bytes, 0, 0
 	while len < maxlen do
 		len = len + knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
 		count = count + 1
@@ -98,7 +99,7 @@ end
 
 -- Compute RDATA set length
 local function rdsetlen(rr)
-	local p, len = rr.raw_data, 0
+	local p, len = rr.raw_data.bytes, 0
 	for _ = 1,rr.rdcount do
 		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
 		len = len + rdlen
@@ -109,40 +110,32 @@ end
 -- Get RDATA set member
 local function rdsetget(rr, n)
 	assert(n < rr.rdcount)
-	local p = rr.raw_data
+	local p = rr.raw_data.bytes
 	for _ = 1,n do
 		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p))
 		p = p + rdlen
 	end
-	return p
+	return ffi.cast('knot_rdata_t *', p)
 end
 
 local function rdataiter(rr, it)
 	it[1] = it[1] + 1
 	if it[1] < rr.rdcount then
-		local rdata = it[2]
-		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(rdata))
+		local rdata = ffi.cast('knot_rdata_t *', it[2])
+		local rdlen = knot.knot_rdata_array_size(#rdata)
 		it[2] = it[2] + rdlen
 		return it, rdata
 	end
 end
 
 -- Domain name wire length
-local function dnamelenraw(dname)
-	local p, i = dname, 0
-	assert(p ~= nil)
-	while p[i] ~= 0 do
-		i = i + p[i] + 1
-	end
-	return i + 1 -- Add label count
-end
 local function dnamelen(dname)
-	return (dnamelenraw(dname.bytes))
+	return (knot.knot_dname_size(dname))
 end
 
 -- Canonically compare domain wire name / keys
 local function dnamecmp(lhs, rhs)
-	return cutil.dnamecmp(lhs.bytes, rhs.bytes)
+	return (cutil.dnamecmp(lhs.bytes, rhs.bytes))
 end
 
 -- Wire writer
@@ -201,9 +194,7 @@ utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
 utils.rdataiter = rdataiter
 utils.dnamelen = dnamelen
-utils.dnamelenraw = dnamelenraw
 utils.dnamecmp = dnamecmp
-utils.dnamecmpraw = cutil.dnamecmp
 utils.mtime = cutil.mtime
 
 -- Inverse table
@@ -328,17 +319,16 @@ end
 -- format: { u8 name [1-255], u16 type }
 local function searchkey(owner, type, buf)
 	if not buf then
-		buf = ffi.new('char [?]', dnamelen(owner) + 2)
+		buf = ffi.new('char [?]', owner:len() + 2)
 	end
 	-- Convert to lookup format (reversed, label length zeroed)
-	local nlen = cutil.dnamekey(buf, ffi.cast('void *', owner))
+	local nlen = cutil.dnamekey(buf, owner.bytes)
 	-- Write down record type
-	buf[nlen] = bit.rshift(bit.band(type, 0xff00), 8)
-	buf[nlen + 1] = bit.band(type, 0x00ff)
+	buf[nlen] = bit.rshift(type, 8)
+	buf[nlen + 1] = bit.band(type, 0xff)
 	return buf, nlen + 2
 end
 utils.searchkey = searchkey
-
 
 -- Reseed from pseudorandom pool
 do

@@ -309,7 +309,7 @@ ffi.metatype(mdb_txn_t, {
             elseif ret ~= 0 then
                 return mdb_error(ret)
             end
-            return val
+            return val, key
         end,
         del = function (t, key, val)
             assert(t.valid, 'operation on aborted transaction')

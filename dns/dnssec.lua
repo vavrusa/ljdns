@@ -372,7 +372,7 @@ ffi.metatype(signer_t, {
 				local rrsig_data = rrsig:rdata(0)
 				local w = utils.wire_reader(rrsig_data, #rrsig_data)
 				self:add(w:bytes(18), 18) -- Add header
-				local signer_len = utils.dnamelenraw(w:tell())
+				local signer_len = utils.dnamelen(w:tell())
 				self:add(w:bytes(signer_len), signer_len) -- Add signer
 				local signature = w:bytes(w.maxlen - w.len)
 				-- Add RRSet wire and verify against signature
@@ -863,7 +863,7 @@ end
 dns.rdata.rrsig_signature = function(rdata)
 	local w = utils.wire_reader(rdata, utils.rdlen(rdata))
 	w:seek(18) -- Skip header
-	local signer_len = utils.dnamelenraw(w:tell())
+	local signer_len = utils.dnamelen(w:tell())
 	w:seek(signer_len) -- Skip signer name
 	return w:bytes(w.maxlen - w.len)
 end

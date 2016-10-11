@@ -401,7 +401,7 @@ go(function ()
 		local now = os.time()
 		local time, action = keyset:plan(now)
 		print('next action at', time, dnssec.tostring.action[action])
-		go.block(nil, time - now) -- Wait until the event time
+		go.block(0, time - now) -- Wait until the event time
 		keyset:action(action, time)
 	end
 end)
