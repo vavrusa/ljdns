@@ -17,8 +17,13 @@ local stats = {
 	noerror = 0, nodata = 0, nxdomain = 0, servfail = 0,
 	cached = 0, slow = 0, dnssec = 0,
 }
-local latency = {} for _, l in ipairs({1,10,50,100,250,500,1000,1500,3000}) do
+local latency = {}
+for _, l in ipairs({1,10,50,100,250,500,1000,1500,3000}) do
 	latency[l] = 0
+end
+local rcodes = {}
+for k,v in pairs(dns.tostring.rcode) do
+	rcodes[k] = v:lower()
 end
 
 -- Export module
@@ -38,33 +43,27 @@ local M = {
 }
 
 -- Pooled objects
-local rqpool, rqpool_len = {}, 0
+local rqpool = {}
 local function drain()
-	local rq
-	if rqpool_len > 0 then
-		rqpool_len = rqpool_len - 1
-		rq = table.remove(rqpool)
-	else
-		rq = {
-			query = dns.packet(M.max_query),
-			answer = dns.packet(M.max_answer),
-			authority = {},
-			additional = {},
-		}
-	end
+	local rq = table.remove(rqpool) or {
+		query = dns.packet(M.max_query),
+		answer = dns.packet(M.max_answer),
+		authority = {},
+		additional = {},
+		stats = stats,
+	}
 	return rq
 end
 
 local function recycle(r)
 	r.sock, r.addr = nil, nil
-	if rqpool_len < M.max_pool then
+	if #rqpool < M.max_pool then
 		-- Clear the packet buffer and lists
 		r.query:clear()
 		table.clear(r.authority)
 		table.clear(r.additional)
 		-- Put to freelist
 		table.insert(rqpool, r)
-		rqpool_len = rqpool_len + 1
 	end
 end
 M.release = recycle
@@ -87,10 +86,10 @@ end
 local function log_answer(req)
 	-- Log by RCODE
 	local rcode = req.answer:rcode()
-	if rcode == 0 and req.answer:ancount() == 0 then
+	if rcode == 0 and req.answer:empty() then
 		rcode = 'nodata'
 	else
-		rcode = string.lower(dns.tostring.rcode[rcode])
+		rcode = rcodes[rcode]
 	end
 	stats[rcode] = (stats[rcode] or 0) + 1
 	-- Log by options
@@ -130,17 +129,14 @@ function M.serve(req, writer, routemap)
 	else
 		stats.udp = stats.udp + 1
 	end
-	local qname, qtype = req.query:qname(), req.query:qtype()
 	-- Find best route for query
+	local qname, qtype = req.query:qname(), req.query:qtype()
 	local route = getroute(req, qname, routemap)
 	-- Set request meta
 	local answer = req.answer
-	req.xfer = (qtype == dns.type.AXFR or qtype == dns.type.IXFR)
 	req.qname, req.qtype = qname, qtype
-	req.soa = nil
-	req.nocache = false
+	req.soa, req.nocache = nil, nil
 	req.now = gettime()
-	req.stats = stats
 	req.query:toanswer(answer)
 	-- Answer request if it's routable
 	if route then
@@ -156,13 +152,7 @@ function M.serve(req, writer, routemap)
 			end
 			req.answer.opt = req.opt
 		end
-		-- Do not process transfers over UDP
-		if req.xfer and not req.is_tcp then
-			req:vlog('zone transfer over udp, rejected')
-			answer:tc(true)
-		else
-			route.serve(req, writer)
-		end
+		route.serve(req, writer)
 		-- Add authority and additionals
 		answer:begin(dns.section.AUTHORITY)
 		for _, rr in ipairs(req.authority) do answer:put(rr, true) end
@@ -173,19 +163,16 @@ function M.serve(req, writer, routemap)
 	else
 		answer:rcode(dns.rcode.REFUSED)
 	end
-	log_answer(req)
 	-- Drop the empty answers
-	if answer.size == 0 then
-		recycle(req)
-		return
+	if answer.size > 0 then
+		log_answer(req)
+		-- Serialize OPT if present
+		if req.opt then
+			answer:put(req.opt, true)
+			req.optbuf, req.opt = req.opt, nil
+		end
+		writer(req, answer)
 	end
-	-- Serialize OPT if present
-	if req.opt then
-		answer:put(req.opt, true)
-		req.optbuf, req.opt = req.opt, nil
-	end
-	-- Finalize answer and stream it
-	writer(req, answer)
 	recycle(req)
 end
 
@@ -220,7 +207,7 @@ function M.route(name, t)
 		-- serve() terminates if it returns false, otherwise it's chained
 		if r.serve then
 			local prev = serve
-			serve = function (a, b) return prev(a, b) and r:serve(a, b) ~= false end
+			serve = function (a, b) return (prev(a, b) and r:serve(a, b) ~= false) end
 		end
 		-- complete() is chained
 		if r.complete then
@@ -281,7 +268,7 @@ function M.listen(host, t, o)
 	return interface
 end
 
-function M.conf(conf)
+function M.config(conf)
 	local ok, err
 	if type(conf) ~= 'function' then
 		ok, conf, err = pcall(loadfile, conf)

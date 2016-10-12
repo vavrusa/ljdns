@@ -6,14 +6,14 @@ local M = {}
 local function serve(self, req, writer)
 	-- Act only within zone and for non-meta types
 	local qname = req.qname
-	if req.xfer or not qname:within(self.zone) then return end
+	if not qname:within(self.zone) then return end
 
 	-- Empty zone, NXDOMAIN
 	req.answer:aa(true)
 	if not qname:equals(self.zone) then
 		req.answer:rcode(dns.rcode.NXDOMAIN)
 	-- If not TXT, respond with NODATA
-	elseif req.query:qtype() ~= dns.type.TXT then
+	elseif req.qtype ~= dns.type.TXT then
 		req.answer:rcode(dns.rcode.NOERROR)
 	-- TXT apex, synthesise TXT
 	else

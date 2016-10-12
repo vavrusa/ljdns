@@ -35,14 +35,15 @@ See [openresty/stream-lua-nginx-module][stream-lua].
 route {
 	cookie {},
 	lru {},
-	rrl { rate = 5 },
 	proxy {
 		origins = {'8.8.8.8#53', '8.8.4.4'},
 		weights = {10, 20},
 		select = 'weighted',
 		proto = 'tcp',
 		poolsize = 4,
+		rate = 1000,
 	},
+	rrl { rate = 5 },
 }
 -- Route to serve local zone with online signing
 route('static', {
@@ -85,7 +86,7 @@ These routes are available:
 * route/skydns - a distributed service discovery and announcement with DNS ([SkyDNS][skydns] replacement).
 * route/whoami - service that responds with query source in given zones.
 * route/cookie - implements [RFC7873][rfc-cookies] DNS cookies
-* route/secondary - DNS secondary service syncing to backing store (zone files or primary)
+* route/auth - DNS secondary service syncing to backing store (zone files or primary)
 
 ## Examples
 

@@ -27,7 +27,7 @@ local function restore(req, dst, rr, writer, ...)
 end
 
 local function serve(self, req)
-	if req.nocache or req.xfer then return end
+	if req.nocache then return end
 	local k = key(req)
 	local val = self.cache:get(k)
 	-- Purge stale records
@@ -61,7 +61,7 @@ local function serve(self, req)
 end
 
 local function complete(self, req)
-	if req.nocache or req.xfer then return end
+	if req.nocache then return end
 	local rrs, an, ns, ar = {}
 	an = add(rrs, req.answer, true)
 	ns = add(rrs, req.authority)

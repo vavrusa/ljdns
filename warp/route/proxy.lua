@@ -140,8 +140,6 @@ local function rescan(req, pkt, bytes)
 end
 
 local function serve(self, req)
-	-- Do not proxy transfers
-	if req.xfer then return end
 	-- Choose transport protocol and origin
 	local dst = self:select(req)
 	if not dst then

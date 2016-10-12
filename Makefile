@@ -18,7 +18,7 @@ check: $(addsuffix .test,$(OBJS))
 	@echo "[*] unit tests"
 	@busted --lua=$(LUA) -o TAP
 	@echo "[*] static analysis"
-	@luacheck --codes --formatter TAP . --exclude-files *.test.lua warp/config.lua warp/vendor
+	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua warp/vendor warp/config.lua
 clean:
 	$(RM) $(CLIB)
 $(CLIB): src/utils.c src/murmurhash3.c

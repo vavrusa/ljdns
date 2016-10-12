@@ -85,7 +85,7 @@ local function ratelimit(self, req)
 end
 
 local function complete(self, req, writer)
-	if req.xfer or req.is_tcp then return end
+	if req.is_tcp then return end
 	-- Classify based on response contents
 	local cls, name = rclass(req)
 	name = name and name:towire() or ''

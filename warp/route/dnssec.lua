@@ -99,7 +99,7 @@ end
 -- Sign records in the answer
 local function serve(self, req, writer)
 	-- Check if we DNSSEC is requested
-	if req.xfer or not dns.edns.dobit(req.query.opt) then
+	if not dns.edns.dobit(req.query.opt) then
 		return
 	end
 	-- Sign only NOERROR/NXDOMAIN responses

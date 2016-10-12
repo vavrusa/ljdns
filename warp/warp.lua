@@ -6,6 +6,10 @@ local go, utils = require('dns.nbio'), require('dns.utils')
 
 -- Support OpenResty modules
 _G.require = require('warp.vendor.resty').require
+-- Enable trace stitching
+require('jit.opt').start('minstitch=2')
+-- Limit the number of in-flight requests
+go.concurrency(256)
 
 -- Writer closures for UDP and TCP
 local function writer_udp(req, msg)
@@ -39,22 +43,24 @@ end
 local function udp(host, port, iface)
 	-- Create bound sockets
 	local msg, addr = string.format('udp "%s#%d: ', host, port), go.addr(host, port)
-	local udp, err = go.socket(addr)
-	if not udp then error(msg .. err) end
+	local sock, err = go.socket(addr)
+	if not sock then error(msg .. err) end
 	warp.vlog(nil, msg .. 'listening')
-	go(function()
-		local addr, ok, err, co = udp:getsockname(), 0
-		while ok do
-			-- Fetch next request off freelist
-			local req = warp.request(udp, addr)
-			ok, err = go.udprecv(udp, req.query.wire, req.query.max_size, addr)
-			if ok then
-				req.query.size = ok
-				ok, err, co = go(warp.serve, req, writer_udp, iface.match)
+	local addr, ok, err, co = sock:getsockname(), 0
+	for _ = 1, go.max_coroutines/4 do
+		go(function()
+			while ok do
+				-- Fetch next request off freelist
+				local req = warp.request(sock, addr)
+				ok, err = go.udprecv(sock, req.query.wire, req.query.max_size, addr)
+				if ok then
+					req.query.size = ok
+					ok, err, co = pcall(warp.serve, req, writer_udp, iface.match)
+				end
+				if err then req:log('error', '%s, %s', err, debug.traceback(co)) end
 			end
-			if err then req:log('error', '%s, %s', err, debug.traceback(co)) end
-		end
-	end)
+		end)
+	end
 end
 
 local function tcp(host, port, iface)
@@ -149,7 +155,7 @@ local k = 1 while k <= #arg do
 		help()
 		return 0
 	else
-		assert(warp.conf(v))
+		assert(warp.config(v))
 	end
 	k = k + 1
 end
@@ -168,10 +174,6 @@ for _,iface in ipairs(warp.hosts) do
 end
 -- end)
 
--- Enable trace stitching
-require('jit.opt').start('minstitch=2')
--- Limit the number of in-flight requests
-go.concurrency(256)
 -- Run coroutines
 while true do
 	local ok, err, co = go.run(1)

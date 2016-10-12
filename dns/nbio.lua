@@ -238,7 +238,7 @@ end
 -- Consecutive ops limit
 local rdops, rdops_max = 0, 256
 -- Negotiate buffer sizes
-local bufsize_min = 128 * 1024
+local bufsize_min = 256 * 1024
 -- No SIGPIPE on broken connections
 S.sigaction('pipe', 'ign')
 -- Support MSG_FASTOPEN
@@ -246,7 +246,7 @@ if c.TCP.FASTOPEN then c.MSG.FASTOPEN = 0x20000000 end
 
 -- Create platform-specific poller
 -- (Taken from ljsyscall examples)
-local poll = nil
+local poll
 if S.epoll_create then
 	poll = {
 		init = function(p, maxevents)
@@ -258,7 +258,11 @@ if S.epoll_create then
 			local ev = p.event
 			ev.events = write and c.EPOLL.OUT or c.EPOLL.IN
 			ev.data.fd = s
-			return p.fd:epoll_ctl(c.EPOLL_CTL.ADD, s, ev)
+			local ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.ADD, s, ev)
+			if err and err.errno == c.E.EXIST then
+				ok, err = true, nil -- Ok, if socket is already in the set
+			end
+			return ok, err
 		end,
 		del = function(p, s, write)
 			local ev = p.event
@@ -307,10 +311,10 @@ elseif S.kqueue then
 			ev.data = timeout
 			return p.fd:kevent(p.event, nil)
 		end,
-		eof = function(ev) return ev.EOF or ev.ERROR end,
-		ein = function(ev) return ev.filter == c.EVFILT.READ end,
-		eout = function(ev) return ev.filter == c.EVFILT.WRITE end,
-		timer = function(ev) return ev.filter == c.EVFILT.TIMER end,
+		eof = function (ev) return bit.band(ev.flags, bit.bor(c.EV.EOF, c.EV.ERROR)) ~= 0 end,
+		ein = function (ev) return ev.filter == c.EVFILT.READ end,
+		eout = function (ev) return ev.filter == c.EVFILT.WRITE end,
+		timer = function (ev) return ev.filter == c.EVFILT.TIMER end,
 	}
 else
 	error('no epoll or kqueue support')
@@ -368,7 +372,7 @@ local function getsocket(addr, tcp, client)
 		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.RCVBUF)
 		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.RCVBUF, math.max(ok, bufsize_min)) end
 		ok = sock:getsockopt(c.SOL.SOCKET, c.SO.SNDBUF)
-		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.SNDBUF, math.max(ok, 4*bufsize_min)) end
+		if ok then sock:setsockopt(c.SOL.SOCKET, c.SO.SNDBUF, math.max(ok, 2*bufsize_min)) end
 	end
 	sock:nonblock()
 	return sock, err
@@ -459,10 +463,11 @@ end
 -- Receive datagrams (with yielding when not ready)
 nbrecvfrom = function(sock, addr, buf, buflen)
 	-- Control starvation by limiting number of consecutive read ops
-	rdops = rdops + 1
 	if rdops > rdops_max then
-		coroutine.yield(M.readers, sock)
 		rdops = 0
+		coroutine.yield(M.readers, sock)
+	else
+		rdops = rdops + 1
 	end
 	local ret, err, saddr = sock:recvfrom(buf, buflen, nil, addr)
 	if err and err.errno == c.E.AGAIN then
@@ -583,15 +588,15 @@ local function resume(curlist, fd)
 	return true
 end
 
-local function start(closure, ...)
+local function start(closure, a, b, c)
 	if not closure then return nil end
 	-- If maximum number of coroutines is reached, execute in parent
 	if M.max_coroutines and M.coroutines >= M.max_coroutines then
-		return pcall(closure, ...)
+		return pcall(closure, a, b, c)
 	end
 	-- Coroutine resume transfers ownership to return socket
 	local co = coroutine.create(closure)
-	local ok, list, fd, deadline = coroutine.resume(co, ...)
+	local ok, list, fd, deadline = coroutine.resume(co, a, b, c)
 	if not ok or not fd then
 		return ok, list, co
 	end
@@ -608,7 +613,7 @@ local function start(closure, ...)
 end
 
 local function step(timeout)
-	local pollfd, ok, err, co, count = M.pollfd, true, nil, nil, 0
+	local pollfd, ok, err, co = M.pollfd, true, nil, nil
 	for _, ev in pollfd:get(timeout) do
 		-- Stop listening when error is encountered
 		if pollfd.eof(ev) then
@@ -620,14 +625,10 @@ local function step(timeout)
 				ok, err, co = resume(M.readers, ev.fd)
 				M.writers[ev.fd] = nil
 			end
-		-- Process write events
-		elseif pollfd.eout(ev) then
-			count = count + 1
-			ok, err, co = resume(M.writers, ev.fd)
-		-- Process read events
-		elseif pollfd.ein(ev) or pollfd.timer(ev) then
-			count = count + 1
-			ok, err, co = resume(M.readers, ev.fd)
+		-- Process read/write events
+		else
+			local list = pollfd.ein(ev) and M.readers or M.writers
+			ok, err, co = resume(list, ev.fd)
 		end
 		if err then break else ok = true end
 	end

@@ -14,11 +14,11 @@ local M = {}
 
 -- Add RR to packet and send it out if it's full
 local function add_rr(req, writer, rr)
-	if not req.answer:put(rr, req.xfer) then
+	if not req.answer:put(rr) then
 		assert(writer(req, req.answer, req.addr))
 		req.msg:toanswer(req.answer)
 		req.answer:aa(true)
-		req.answer:put(rr, req.xfer) -- Promise not to access RR afterwards
+		req.answer:put(rr)
 		return 1
 	end
 	return 0
@@ -48,18 +48,16 @@ local function answer(self, req, writer, rr, txn)
 		local covered, owner = match:type(), match:owner()
 		if covered == req.qtype or covered == dns.type.CNAME then
 			if wildcard or req.qname:equals(owner) then
-				return positive(self, req, writer, match)
+				return (positive(self, req, writer, match))
 			end
 		end
 	end
 	-- No match for given name
-	return negative(self, req, writer, rr)
+	return (negative(self, req, writer, rr))
 end
 
 -- Answer query from zonefile
 local function serve(self, req, writer)
-	-- Do not proxy transfers
-	if req.xfer then return end
 	-- Fetch an r-o transaction
 	local txn = table.remove(txnpool)
 	if txn then

@@ -96,7 +96,6 @@ local function bad(self, req, cookie)
 end
 
 local function serve(self, req, writer)
-	if req.xfer then return end
 	-- Find COOKIE option and verify it
 	local cookie = dns.edns.option(req.query.opt, dns.option.COOKIE)
 	if not cookie then return end

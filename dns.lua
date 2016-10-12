@@ -304,7 +304,7 @@ ffi.metatype( knot_dname_t, {
 		return dname:len()
 	end,
 	__eq = function(a, b)
-		return a:equals(b)
+		return (a:equals(b))
 	end,
 	__lt = function (a,b)
 		return a:compare(b) < 0
@@ -344,7 +344,7 @@ ffi.metatype( knot_dname_t, {
 		len = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
 			assert(dname.bytes ~= nil)
-			return utils.dnamelen(dname.bytes)
+			return (utils.dnamelen(dname.bytes))
 		end,
 		labels = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
@@ -482,12 +482,8 @@ ffi.metatype( knot_rrset_t, {
 		return rr
 	end,
 	__lt = function (a, b) return a:lt(a, b) end,
-	__tostring = function(rr)
-		return rr:tostring()
-	end,
-	__ipairs = function (self)
-		return utils.rdataiter, self, {-1,self.raw_data.bytes}
-	end,
+	__tostring = function(rr) return rr:tostring() end,
+	__ipairs = function (self) return utils.rdataiter, self, {-1,self.raw_data.bytes} end,
 	__index = {
 		lt = function (a, b)
 			assert(ffi.istype(knot_rrset_t, a))
@@ -614,13 +610,15 @@ local function edns_payload(rr, val)
 	return rr:class()
 end
 local function edns_do(rr, val, raw)
-	if rr == nil then return end
+	if rr == nil then return false end
 	local ttl = rr:ttl()
 	if val ~= nil then
 		ttl = bit.bor(ttl, val and 0x8000 or 0x00)
 		rr:ttl(ttl)
+		return true
+	else
+		return bit.band(ttl, 0x8000) ~= 0
 	end
-	return bit.band(ttl, 0x8000) ~= 0
 end
 local function edns_flags(rr)
 	if rr == nil then return 0 end
@@ -690,6 +688,7 @@ local function pkt_flags(pkt, idx, off, val)
 	if val ~= nil then
 		if val then pkt.wire[idx] = bit.bor(pkt.wire[idx], off)
 		else pkt.wire[idx] = bit.band(pkt.wire[idx], bit.bnot(off)) end
+		return true
 	end
 	return (bit.band(pkt.wire[idx], off) ~= 0)
 end
@@ -941,6 +940,7 @@ ffi.metatype( knot_pkt_t, {
 			return dst:parse() and dst or nil
 		end,
 		clear = function (pkt)
+			pkt_unref(pkt)
 			return (knot.knot_pkt_clear(pkt))
 		end,
 		towire = function (pkt)

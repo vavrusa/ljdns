@@ -179,7 +179,7 @@ end
 M.answer = answer
 
 local function serve(self, req)
-	if req.nocache or req.xfer or req.answer:aa() then return end
+	if req.nocache or req.answer:aa() then return end
 	local qname, qtype = req.qname, req.qtype
 	if self.zone and not qname:within(self.zone) then return end
 	-- Answer type
