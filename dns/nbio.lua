@@ -13,6 +13,7 @@
 
 local ffi, bit = require('ffi'), require('bit')
 local n16 = require('dns.utils').n16
+local abi = require('syscall.abi')
 
 -- Declare module
 local M = {
@@ -201,7 +202,7 @@ local S = require('syscall')
 local c, t = S.c, S.t
 
 local function recv(fd, buf, count, flags)
-	if ffi.istype(S.t.fd, fd) then
+	if ffi.istype(S.t.fd, fd) and abi.os ~= 'linux' then
 		-- Specialize: do not return source address
 		-- @note remove when ljdns > 0.12 is used
 		local ret, err = ffi.C.recvfrom(fd:getfd(), buf, count or #buf, c.MSG[flags], nil, nil)
@@ -421,7 +422,7 @@ end
 -- Send buffer pair with scatter/gather write
 nbsendv = function(sock, b1, b1len, b2, b2len)
 	-- Use specialised version only for ljsyscall sockets
-	if not ffi.istype(S.t.fd, sock) then
+	if not ffi.istype(S.t.fd, sock) or abi.os == 'linux' then
 		return nbsendv_compat(sock, b1, b1len, b2, b2len)
 	end
 	-- Prepare scatter write
