@@ -32,10 +32,11 @@ local function negative(self, req, writer, rr, txn)
 	table.insert(req.authority, req.soa)
 end
 
-local function answer(self, req, writer, rr, txn)
+local function answer(self, req, writer, rr, txn, qname)
 	-- Find name encloser in given zone
-	local match, cut, wildcard = self.store:match(txn, req.soa, req.qname, req.qtype, rr)
+	local match, cut, wildcard = self.store:match(txn, req.soa, qname, req.qtype, rr)
 	if cut then -- Name is below a zone cut
+		req:vlog('name below zone cut %s, sending referral', cut:owner())
 		cut = cut:copy()
 		table.insert(req.authority, cut)
 		self.store:addglue(txn, cut, rr, req.additional)
@@ -46,18 +47,30 @@ local function answer(self, req, writer, rr, txn)
 	-- Encloser equal to QNAME, or covered by a wildcard
 	if match then
 		local covered, owner = match:type(), match:owner()
-		if covered == req.qtype or covered == dns.type.CNAME then
-			if wildcard or req.qname:equals(owner) then
-				return (positive(self, req, writer, match))
+		local is_cname = (covered == dns.type.CNAME)
+		if covered == req.qtype or is_cname then
+			if wildcard or qname:equals(owner) then
+				positive(self, req, writer, match)
+				-- Chase CNAME chain
+				if is_cname and req.qtype ~= dns.type.CNAME then
+					local target = ffi.cast('knot_dname_t *', match:rdata(0))
+					if target:within(req.soa:owner()) then
+						req:vlog('chasing CNAME %s', target)
+						answer(self, req, writer, rr, txn, target[0])
+					end
+				end
+				return
 			end
 		end
 	end
 	-- No match for given name
+	req:vlog('name not exists')
 	return (negative(self, req, writer, rr))
 end
 
 -- Answer query from zonefile
 local function serve(self, req, writer)
+	if req.answer:aa() then return end
 	-- Fetch an r-o transaction
 	local txn = table.remove(txnpool)
 	if txn then
@@ -77,7 +90,7 @@ local function serve(self, req, writer)
 	end
 	-- Set zone authority and build answer
 	req.soa = soa:copy()
-	answer(self, req, writer, rr, txn)
+	answer(self, req, writer, rr, txn, req.qname)
 	txn:reset()
 	table.insert(txnpool, txn)
 	return
@@ -149,17 +162,24 @@ local function sync_file(self, zone, path)
 		zone, updated, deleted, now() - start)
 end
 
+local function loadzonefile(self, path)
+	local zone = dns.dname.parse(path:match('(%S+).zone$'))
+	sync_file(self, zone, path)
+	collectgarbage()
+end
+
 -- Synchronise with backing store
 local function sync(self)
 	if not self.source then return end
 	-- File source backend
-	for _,v in ipairs(dns.utils.ls(self.source)) do
-		if v:find('.zone$') then
-			local path = self.source .. '/' .. v
-			local zone = dns.dname.parse(v:match('(%S+).zone$'))
-			sync_file(self, zone, path)
-			collectgarbage()
+	if dns.utils.isdir(self.source) then
+		for _,v in ipairs(dns.utils.ls(self.source)) do
+			if v:find('.zone$') then
+				loadzonefile(self, self.source .. '/' .. v)
+			end
 		end
+	else
+		loadzonefile(self, self.source)
 	end
 end
 
