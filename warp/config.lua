@@ -48,7 +48,7 @@ listen('tls://127.0.0.1#53537', {
 })
 
 listen('127.0.0.1#53535', {
-	-- route = {
+	-- default = {
 	-- 	'example',
 	-- },
 	skydns = {
@@ -67,5 +67,5 @@ listen('127.0.0.1#53535', {
 
 listen('http://127.0.0.1#8080', {
 	['edge.api'] = '/edge',
-	['route.api'] = '/api',
+	['default.api'] = '/api',
 })

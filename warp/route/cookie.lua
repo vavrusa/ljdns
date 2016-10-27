@@ -117,6 +117,7 @@ function M.init(conf)
 	conf.rollover = conf.rollover and math.min(conf.rollover, 36*24*3600) or 26*3600
 	conf.retain = conf.retain and math.min(conf.retain, 300) or 150
 	conf.serve = serve
+	conf.name = 'cookie'
 	reseed(conf)
 	return conf
 end

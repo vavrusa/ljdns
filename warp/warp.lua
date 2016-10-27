@@ -3,6 +3,7 @@ local S = require('syscall')
 local dns = require('dns')
 local warp = require('warp.init')
 local go, utils = require('dns.nbio'), require('dns.utils')
+local ffi = require('ffi')
 
 -- Support OpenResty modules
 _G.require = require('warp.vendor.resty').require
@@ -29,7 +30,6 @@ local function read_tcp(sock, routemap)
 		if ok == 0 then break end
 		if not ok then req:log('error', err) break end
 		-- Spawn off new coroutine for request
-		if queries > 0 then req.sock = sock:dup() end
 		req.query.size = ok
 		ok, err, co = go(warp.serve, req, writer_tcp, routemap)
 		if not ok then req:log('error', '%s, %s', err, debug.traceback(co)) end
@@ -112,8 +112,10 @@ local function read_http(sock, req, route)
 	local addr = sock:getpeername()
 	req.sock, req.addr = sock, addr
 	-- TODO: worry about partial header reads
-	local headers = req.sock:read()
-	if headers then
+	local buf = S.t.buffer(512)
+	local nread = go.nbrecv(req.sock, buf, 512, true)
+	if nread and nread > 0 then
+		local headers = ffi.string(buf, nread)
 		req.method, req.url, req.proto = headers:match('(%S+)%s(%S+)%s([^\n]+)')
 		-- Serve API call
 		local ok, err = pcall(warp.api, req, write_http, route)

@@ -132,7 +132,7 @@ local function udprecv(sock, buf, buflen, addr)
 	if not buf then
 		ret, err, addr = nbrecvfrom(sock, addr, rcvbuf, ffi.sizeof(rcvbuf))
 		if ret then ret = ffi.string(rcvbuf, ret) end
-		return ret, err, addr
+		return ret, err or addr
 	-- Receive on "connected" UDP socket
 	elseif not addr then
 		return nbrecv(sock, buf, buflen, true)

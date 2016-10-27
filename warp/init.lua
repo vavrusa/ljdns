@@ -104,7 +104,7 @@ end
 -- Find route for received query
 local function getroute(req, qname, routemap)
 	if not routemap then
-		return M.routes.route
+		return M.routes.default
 	else
 		local route, p = nil, qname.bytes
 		for _ = 1, qname:labels() do
@@ -152,14 +152,14 @@ function M.serve(req, writer, routemap)
 			end
 			req.answer.opt = req.opt
 		end
-		route.serve(req, writer)
+		route:serve(req, writer)
 		-- Add authority and additionals
 		answer:begin(dns.section.AUTHORITY)
 		for _, rr in ipairs(req.authority) do answer:put(rr, true) end
 		answer:begin(dns.section.ADDITIONAL)
 		for _, rr in ipairs(req.additional) do answer:put(rr, true) end
 		-- Run complete handlers
-		route.complete(req)
+		route:complete(req)
 	else
 		answer:rcode(dns.rcode.REFUSED)
 	end
@@ -177,12 +177,12 @@ function M.serve(req, writer, routemap)
 end
 
 -- Serve API call
-function M.api(req, writer, iface)
+function M.api(req, writer, routemap)
 	local route, step, endpoint, url = req.url:match('^(/[^/]+)/([^/]+)/([^/]+)(.*)')
 	if not route then
 		return writer(req, '', '404 No such API')
 	end
-	route = iface.match[route]
+	route = routemap[route]
 	step = route.match[step]
 	if not step or not step.api[endpoint] then
 		return writer(req, '', '404 No such endpoint')
@@ -199,7 +199,7 @@ end
 -- Form route
 function M.route(name, t)
 	if type(name) == 'table' and not t then
-		t, name = name, 'route'
+		t, name = name, 'default'
 	end
 	-- Compile callback closures
 	local match, serve, complete = {}, function () return true end, function () end
@@ -207,12 +207,12 @@ function M.route(name, t)
 		-- serve() terminates if it returns false, otherwise it's chained
 		if r.serve then
 			local prev = serve
-			serve = function (a, b) return (prev(a, b) and r:serve(a, b) ~= false) end
+			serve = function (self, a, b) return (prev(self, a, b) and r:serve(a, b) ~= false) end
 		end
 		-- complete() is chained
 		if r.complete then
 			local prev = complete
-			complete = function (a) prev(a) r:complete(a) end
+			complete = function (self, a) prev(self, a) r:complete(a) end
 		end
 		if r.name then
 			match[r.name] = r
@@ -224,6 +224,7 @@ end
 
 -- Compose routes for query matches
 function M.match(t)
+	if not t then return t end
 	local match = {}
 	if type(t) == 'table' then
 		assert(type(t) == 'table', 'expected match { ... }')
@@ -276,7 +277,7 @@ function M.config(conf)
 			return nil, err
 		end
 	end
-	local env = {conf = M, route = M.route, listen = M.listen}
+	local env = {conf = M, route = M.route, routes = M.routes, listen = M.listen}
 	env = setmetatable(env, {
 		__index = function (t,k)
 			local v = rawget(t, k) or _G[k]
