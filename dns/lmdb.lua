@@ -372,7 +372,7 @@ ffi.metatype(mdb_env_t, {
         end,
         stat = function (t)
             local stat = ffi.new('MDB_stat [1]')
-            local ret = lmdb.mdb_stat(t.env, stat)
+            local ret = lmdb.mdb_env_stat(t.env, stat)
             if ret ~= 0 then return mdb_error(ret) end
             return stat[0]
         end

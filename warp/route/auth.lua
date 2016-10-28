@@ -10,6 +10,11 @@ local function log_event(msg, ...)
 	log(nil, 'info', msg, ...)
 end
 
+local function log_error(msg, ...)
+	local log = require('warp.init').log
+	log(nil, 'error', msg, ...)
+end
+
 local M = {}
 
 -- Add RR to packet and send it out if it's full
@@ -97,17 +102,16 @@ local function serve(self, req, writer)
 end
 
 local function update(store, keys, txn, rr)
-	local ok, key = store:set(txn, rr)
+	local key = assert(store:set(txn, rr))
 	keys[key] = nil
 	rr:clear()
 	return 1
 end
 
-local function sync_file(self, zone, path)
+local function sync_file(self, txn, zone, path)
 	-- Open parser and start new txn
 	local parser = assert(rrparser.new())
 	assert(parser:open(path))
-	local txn = self.store:txn()
 	-- Get current version of given zone
 	local current, serial, current_keys
 	do
@@ -127,7 +131,6 @@ local function sync_file(self, zone, path)
 			if current and serial == current then
 				log_event('zone: %s, status: unchanged (serial: %u)', zone, current)
 				parser:reset()
-				txn:abort()
 				return
 			else
 				-- Get all keys present in current version of a zone
@@ -157,14 +160,25 @@ local function sync_file(self, zone, path)
 			deleted = deleted + 1
 		end
 	end
-	txn:commit()
 	log_event('zone: %s, status: done (updated: %u, removed: %u, time: %.03fs)',
 		zone, updated, deleted, now() - start)
 end
 
 local function loadzonefile(self, path)
-	local zone = dns.dname.parse(path:match('(%S+).zone$'))
-	sync_file(self, zone, path)
+	local zone = dns.dname.parse(path:match('([^/]+).zone$'))
+	local txn = self.store:txn()
+	local ok, err = pcall(sync_file, self, txn, zone, path)
+	if ok then
+		ok, err = txn:commit()
+		if not ok then
+			log_error('zone: %s, status: failed to commit, error: %s', zone, err)
+		end
+	else
+		txn:abort()
+		log_error('zone: %s, status: failed, error: %s', zone, err)
+	end
+
+
 	collectgarbage()
 end
 

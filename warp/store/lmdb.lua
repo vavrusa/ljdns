@@ -43,7 +43,9 @@ local function set(txn, rr)
 	ffi.copy(val_buf.data, rr.raw_data, rdlen)
 	local data = lmdb.val_t(ffi.offsetof(entry_t, 'data') + rdlen, val_buf)
 	-- Insert into storage
-	return txn:put(lmdb.val_t(len, key), data), ffi.string(key, len)
+	local ok, err = txn:put(lmdb.val_t(len, key), data)
+	if err then return nil, err end
+	return true, ffi.string(key, len)
 end
 
 local function get(txn, name, type, rr)
@@ -100,7 +102,10 @@ local function scan(txn, name)
 	local ok = cur:seek(lmdb.val_t(len - 2, key))
 	local t = {}
 	-- If it can't find the prefix, bail
-	if not ok then return t end
+	if not ok then
+		cur:close()
+		return t
+	end
 	-- Find all keys matching given prefix
 	local ignore
 	for k,_ in ipairs(cur) do

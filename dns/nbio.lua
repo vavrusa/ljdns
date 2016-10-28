@@ -13,7 +13,10 @@
 
 local ffi, bit = require('ffi'), require('bit')
 local n16 = require('dns.utils').n16
+
+-- We need low-level syscall interface for some calls to avoid expensive conversions
 local abi = require('syscall.abi')
+local C = require('syscall.' .. abi.os .. '.c')
 
 -- Declare module
 local M = {
@@ -202,10 +205,10 @@ local S = require('syscall')
 local c, t = S.c, S.t
 
 local function recv(fd, buf, count, flags)
-	if ffi.istype(S.t.fd, fd) and abi.os ~= 'linux' then
+	if ffi.istype(S.t.fd, fd) then
 		-- Specialize: do not return source address
 		-- @note remove when ljdns > 0.12 is used
-		local ret, err = ffi.C.recvfrom(fd:getfd(), buf, count or #buf, c.MSG[flags], nil, nil)
+		local ret, err = C.recvfrom(fd:getfd(), buf, count or #buf, c.MSG[flags], nil, nil)
 		ret = tonumber(ret)
 		if ret == -1 then return nil, ffi.errno() end
 		return ret
@@ -422,7 +425,7 @@ end
 -- Send buffer pair with scatter/gather write
 nbsendv = function(sock, b1, b1len, b2, b2len)
 	-- Use specialised version only for ljsyscall sockets
-	if not ffi.istype(S.t.fd, sock) or abi.os == 'linux' then
+	if not ffi.istype(S.t.fd, sock) then
 		return nbsendv_compat(sock, b1, b1len, b2, b2len)
 	end
 	-- Prepare scatter write
@@ -432,7 +435,7 @@ nbsendv = function(sock, b1, b1len, b2, b2len)
 	local sent, total = 0, b1len + b2len
 	-- Bounded maximum number of attempts
 	for _ = 1, 10 do
-		local nb = ffi.C.writev(sock:getfd(), iov, 2)
+		local nb = C.writev(sock:getfd(), iov, 2)
 		-- Connection closed or error
 		if not nb or nb <= 0 then
 			local err = ffi.errno()

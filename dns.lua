@@ -471,7 +471,7 @@ local rrset_buf = ffi.new('char [?]', rrset_buflen)
 local knot_rrset_t = ffi.typeof('knot_rrset_t')
 ffi.metatype( knot_rrset_t, {
 	__gc = function (rr)
-		if rr.raw_owner then ffi.C.free(rr.raw_owner) end
+		if rr.raw_owner ~= nil then ffi.C.free(rr.raw_owner) end
 		if rr.rdcount > 0 then ffi.C.free(rr.raw_data) end
 	end,
 	__new = function (ct, owner, rrtype, rrclass, ttl)
