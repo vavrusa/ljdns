@@ -104,12 +104,17 @@ end
 -- Find route for received query
 local function getroute(req, qname, routemap)
 	if not routemap then
+		req:vlog('routing using default')
 		return M.routes.default
 	else
 		local route, p = nil, qname.bytes
-		for _ = 1, qname:labels() do
+		for _ = 0, qname:labels() do
+			dns.utils.hexdump(ffi.string(p))
 			route = routemap[ffi.string(p)]
-			if route then break end
+			if route then
+				req:vlog('routing using %s', route.name)
+				break
+			end
 			p = p + (p[0] + 1)
 		end
 		return route
@@ -204,18 +209,38 @@ function M.route(name, t)
 	-- Compile callback closures
 	local match, serve, complete = {}, function () return true end, function () end
 	for _,r in ipairs(t) do
-		-- serve() terminates if it returns false, otherwise it's chained
-		if r.serve then
+		-- simple callback
+		if type(r) == 'function' then
 			local prev = serve
-			serve = function (self, a, b) return (prev(self, a, b) and r:serve(a, b) ~= false) end
-		end
-		-- complete() is chained
-		if r.complete then
-			local prev = complete
-			complete = function (self, a) prev(self, a) r:complete(a) end
-		end
-		if r.name then
-			match[r.name] = r
+			serve = function (self, a, b)
+				local ret = prev(self, a, b)
+				if ret then
+					-- callback may return a RR or value
+					local rr, ttl = r(a, b)
+					if ffi.istype(dns.rrset, rr) then
+						a.answer:put(rr)
+					elseif type(rr) == 'string' then
+						a.answer:put(dns.rrset(a.qname, a.qtype):add(rr, ttl))
+					end
+					return true
+				end
+			end
+		else
+			-- serve() terminates if it returns false, otherwise it's chained
+			if r.serve then
+				local prev = serve
+				serve = function (self, a, b)
+					return (prev(self, a, b) and r:serve(a, b) ~= false)
+				end
+			end
+			-- complete() is chained
+			if r.complete then
+				local prev = complete
+				complete = function (self, a) prev(self, a) r:complete(a) end
+			end
+			if r.name then
+				match[r.name] = r
+			end
 		end
 	end
 	M.routes[name] = {name=name, route=t, serve=serve, complete=complete, match=match}
@@ -277,7 +302,9 @@ function M.config(conf)
 			return nil, err
 		end
 	end
-	local env = {conf = M, route = M.route, routes = M.routes, listen = M.listen}
+	local env = {
+		conf = M, route = M.route, routes = M.routes, listen = M.listen, dns = require('dns')
+	}
 	env = setmetatable(env, {
 		__index = function (t,k)
 			local v = rawget(t, k) or _G[k]

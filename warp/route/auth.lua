@@ -1,21 +1,20 @@
 local dns, rrparser, go = require('dns'), require('dns.rrparser'), require('dns.nbio')
 local now = require('dns.nbio').now
 local ffi = require('ffi')
+local log = require('warp.init').log
 
--- Pooled objects
-local txnpool, cached_rr = {}, ffi.gc(dns.rrset(), dns.rrset.init)
+local M = {}
 
 local function log_event(msg, ...)
-	local log = require('warp.init').log
 	log(nil, 'info', msg, ...)
 end
 
 local function log_error(msg, ...)
-	local log = require('warp.init').log
 	log(nil, 'error', msg, ...)
 end
 
-local M = {}
+-- Pooled objects
+local txnpool, cached_rr = {}, ffi.gc(dns.rrset(), dns.rrset.init)
 
 -- Add RR to packet and send it out if it's full
 local function add_rr(req, writer, rr)
