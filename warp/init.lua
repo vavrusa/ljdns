@@ -109,7 +109,6 @@ local function getroute(req, qname, routemap)
 	else
 		local route, p = nil, qname.bytes
 		for _ = 0, qname:labels() do
-			dns.utils.hexdump(ffi.string(p))
 			route = routemap[ffi.string(p)]
 			if route then
 				req:vlog('routing using %s', route.name)
@@ -207,7 +206,7 @@ function M.route(name, t)
 		t, name = name, 'default'
 	end
 	-- Compile callback closures
-	local match, serve, complete = {}, function () return true end, function () end
+	local match, serve, complete = {}, function () return true end, function () return true end
 	for _,r in ipairs(t) do
 		-- simple callback
 		if type(r) == 'function' then
@@ -236,7 +235,9 @@ function M.route(name, t)
 			-- complete() is chained
 			if r.complete then
 				local prev = complete
-				complete = function (self, a) prev(self, a) r:complete(a) end
+				complete = function (self, a)
+					prev(self, a) r:complete(a)
+				end
 			end
 			if r.name then
 				match[r.name] = r

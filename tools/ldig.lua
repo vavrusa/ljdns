@@ -1,27 +1,28 @@
 #!/usr/bin/env luajit
-local kdns = require('dns')
+local dns = require('dns')
+local nb = require('dns.nbio')
 -- Parse parameters
 local host, port, tcp, tls, xfer, key, cookie = nil, 53, false, false, false, nil
 local version, dobit, bufsize, short, multi = 0, false, nil, false
-local qname, qtype, qclass = '.', kdns.type.NS, kdns.class.IN
+local qname, qtype, qclass = '.', dns.type.NS, dns.class.IN
 local flags = {'rd'}
 local k = 1 while k <= #arg do
 	local v = arg[k]
 	local chr = string.char(v:byte())
 	if chr == '@' then host = v:sub(2)
-	elseif kdns.type[v] ~= nil then
-		qtype = kdns.type[v]
-		if qtype == kdns.type.AXFR or qtype == kdns.type.IXFR then
+	elseif dns.type[v] ~= nil then
+		qtype = dns.type[v]
+		if qtype == dns.type.AXFR or qtype == dns.type.IXFR then
 			xfer, tcp = true, true
 		end
-	elseif kdns.class[v] ~= nil then qclass = kdns.class[v]
+	elseif dns.class[v] ~= nil then qclass = dns.class[v]
 	elseif v == '-' then multi = true
 	elseif v == '-f' then short, k = arg[k + 1], k + 1
 	elseif v == '-p' then port, k = tonumber(arg[k + 1]), k + 1
-	elseif v == '-y' then key, k = kdns.tsig(arg[k + 1]), k + 1
+	elseif v == '-y' then key, k = dns.tsig(arg[k + 1]), k + 1
 	elseif v == '-x' then
 		v, k = arg[k + 1], k + 1
-		qtype, qname = kdns.type.PTR, ''
+		qtype, qname = dns.type.PTR, ''
 		if v:find('.', 1, true) then
 			for i in v:gmatch('[^.]+') do
 				qname = string.format('%s%s.', qname, i)
@@ -96,24 +97,24 @@ else
 	for line in io.lines() do
 		local query = {'.',nil,nil}
 		for w in line:gmatch('([^%s]+)') do
-			if not query[3] and kdns.class[w] then query[3] = kdns.class[w]
-			elseif not query[2] and kdns.type[w] then query[2] = kdns.type[w]
+			if not query[3] and dns.class[w] then query[3] = dns.class[w]
+			elseif not query[2] and dns.type[w] then query[2] = dns.type[w]
 			else query[1] = w end
 		end
-		query[2] = query[2] or kdns.type.A
-		query[3] = query[3] or kdns.class.IN
+		query[2] = query[2] or dns.type.A
+		query[3] = query[3] or dns.class.IN
 		table.insert(planned, query)
 	end
 end
 for _,q in ipairs(planned) do
-	local query = kdns.packet(512)
+	local query = dns.packet(512)
 	for _,flag in ipairs(flags) do query[flag](query, true) end
-	query:question(kdns.dname.parse(q[1]), q[2], q[3])
+	query:question(dns.dname.parse(q[1]), q[2], q[3])
 	if dobit or (bufsize ~= nil and bufsize > 0) or cookie then
 		if bufsize == nil then bufsize = 4096 end
-		query:begin(kdns.section.ADDITIONAL)
-		local rr = kdns.edns.rrset(version, bufsize)
-		kdns.edns.dobit(rr, dobit)
+		query:begin(dns.section.ADDITIONAL)
+		local rr = dns.edns.rrset(version, bufsize)
+		dns.edns.dobit(rr, dobit)
 		if cookie then
 			local client = cookie
 			-- Unpack cookie from hexstring
@@ -125,7 +126,7 @@ for _,q in ipairs(planned) do
 			else
 				client = io.open('/dev/urandom', 'r'):read(8)
 			end
-			kdns.edns.option(rr, kdns.option.COOKIE, client)
+			dns.edns.option(rr, dns.option.COOKIE, client)
 		end
 		query:put(rr)
 	end
@@ -136,32 +137,40 @@ for _,q in ipairs(planned) do
 end
 
 -- Send and wait for answers
-local go = require('dns.nbio')
-local addr, started = go.addr(host, port), go.now()
-local send, recv = go.udpsend, go.udprecv
-if tcp then send, recv = go.tcpsend, go.tcprecv end
-assert(go(function()
+local started = nb.now()
+local send, recv = nb.udpsend, nb.udprecv
+if tcp then
+	send, recv = nb.tcpsend, nb.tcprecv
+end
+assert(nb.go(function()
 	-- Make connection to destination
-	local sock = go.socket(addr.family, tcp)
+	local sock = nb.socket(nb.family(host), tcp and 'stream')
 	if tcp and not tls then -- Attempt TFO
-		go.connect(sock, addr, queries[1]:towire())
+		-- We need to serialise message in a buffer prefixed with message length
+		-- Convenience functions are unavailable and we can't use writev()
+		local ffi, bit = require('ffi'), require('bit')
+		local buf = ffi.new('uint8_t [?]', queries[1].size + 2)
+		local txlen = ffi.cast('uint16_t *', buf)
+		txlen[0] = dns.utils.n16(tonumber(queries[1].size))
+		ffi.copy(buf + 2, queries[1].wire, queries[1].size)
+		assert(sock:connect(host, port, buf, ffi.sizeof(buf)))
 	else -- Make connected socket and send query
-		go.connect(sock, addr)
+		assert(sock:connect(host, port))
 		if tls then -- Upgrade to TLS
 			sock = assert(require('dns.tls').client(sock, 'x509'))
 		end
-		send(sock, queries[1]:towire())
+		send(sock, queries[1])
 	end
-	for i=2,#queries do send(sock, queries[i]:towire()) end
+	for i=2,#queries do send(sock, queries[i]) end
 	-- Start receiving answers
 	for _=1,#queries do
-	local answer = kdns.packet(65535)
-	local rcvd = recv(sock, answer.wire, answer.max_size)
+	local answer = dns.packet(65535)
+	local rcvd = recv(sock, answer)
 	local nbytes, npkts, tsig_ok, soa = 0, 0, true, nil
 	while rcvd and rcvd > 0 do
 		answer.size = rcvd
 		if not answer:parse() then
-			print(kdns.hexdump(answer:towire()))
+			print(dns.hexdump(answer:towire()))
 			error('; MALFORMED MESSAGE')
 		end
 		if key ~= nil and not key:verify(answer) then
@@ -174,20 +183,20 @@ assert(go(function()
 		nbytes, npkts = nbytes + tonumber(rcvd), npkts + 1
 		-- Decide if we should wait for more packets
 		if xfer then
-			local answer = answer:section(kdns.section.ANSWER)
+			local answer = answer:section(dns.section.ANSWER)
 			if #answer > 0 then
 				local last = answer[#answer - 1]
-				if not soa and answer[0]:type() == kdns.type.SOA then -- Starting SOA
-					soa = kdns.rdata.soa_serial(answer[0]:rdata(0))
-				elseif last:type() == kdns.type.SOA then -- Ending SOA
-					if soa == kdns.rdata.soa_serial(last:rdata(0)) then
+				if not soa and answer[0]:type() == dns.type.SOA then -- Starting SOA
+					soa = dns.rdata.soa_serial(answer[0]:rdata(0))
+				elseif last:type() == dns.type.SOA then -- Ending SOA
+					if soa == dns.rdata.soa_serial(last:rdata(0)) then
 						break
 					end
 				end
 			end
 		end
 		answer:clear()
-		rcvd = xfer and recv(sock, answer.wire, answer.max_size) or 0
+		rcvd = xfer and recv(sock, answer) or 0
 	end
 	-- Additional information
 	if not short then
@@ -196,7 +205,7 @@ assert(go(function()
 		elseif nbytes <= 0 then
 			print('; NO ANSWER')
 		end
-		local elapsed = go.now() - started
+		local elapsed = nb.now() - started
 		print(string.format(';; Query time: %d msec', elapsed * 1000.0))
 		print(string.format(';; SERVER: %s#%d', host, port))
 		print(string.format(';; WHEN: %s', os.date()))
@@ -205,4 +214,4 @@ assert(go(function()
 	end
 	end
 end))
-return assert(go.run(3))
+return assert(nb.run(3))

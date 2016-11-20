@@ -391,8 +391,11 @@ ffi.metatype( knot_dname_t, {
 })
 
 -- RDATA parser
-local rrparser = require('dns.rrparser').new()
+local rrparser
 local function rd_parse (rdata_str)
+	if not rrparser then
+		rrparser = require('dns.rrparser').new()
+	end
 	rrparser:reset()
 	if rrparser:parse(string.format('. 0 IN %s\n', rdata_str)) then
 		return ffi.string(rrparser.r_data, rrparser.r_data_length)
@@ -794,17 +797,16 @@ ffi.metatype( knot_pkt_t, {
 	__new = function (ctype, size, wire)
 		if size < 12 or size >= 65536 then error('packet size must be <12, 65535>') end
 		local pkt = knot.knot_pkt_new(nil, size, nil)
-		if pkt ~= nil then
-			if wire == nil then
-				pkt:id(math.random(0, 65535))
-			else
-				assert(size <= #wire)
-				ffi.copy(pkt.wire, wire, size)
-				pkt.size = size
-				pkt.parsed = 0
-			end
-			return ffi.gc(pkt[0], pkt_free)
+		if pkt == nil then return nil end
+		if wire == nil then
+			pkt:id(math.random(0, 65535))
+		else
+			assert(size <= #wire)
+			ffi.copy(pkt.wire, wire, size)
+			pkt.size = size
+			pkt.parsed = 0
 		end
+		return ffi.gc(pkt[0], pkt_free)
 	end,
 	__tostring = function(pkt)
 		return pkt:tostring(false)

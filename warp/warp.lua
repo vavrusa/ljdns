@@ -2,22 +2,22 @@
 local S = require('syscall')
 local dns = require('dns')
 local warp = require('warp.init')
-local go, utils = require('dns.nbio'), require('dns.utils')
+local nb, utils = require('dns.nbio'), require('dns.utils')
 local ffi = require('ffi')
 
 -- Support OpenResty modules
 _G.require = require('warp.vendor.resty').require
 -- Enable trace stitching
-require('jit.opt').start('minstitch=2')
--- Limit the number of in-flight requests
-go.concurrency(256)
+require('jit.opt').start('minstitch=5')
+-- Throttle readers when outstanding requests start piling up
+local concurrency_backpressure = 256
 
 -- Writer closures for UDP and TCP
 local function writer_udp(req, msg)
-	return go.udpsend(req.sock, msg.wire, msg.size, req.addr)
+	return nb.udpsend(req.sock, msg, req.addr)
 end
 local function writer_tcp(req, msg)
-	return go.tcpsend(req.sock, msg.wire, msg.size)
+	return nb.tcpsend(req.sock, msg)
 end
 
 -- TCP can pipeline multiple queries in single connection
@@ -26,12 +26,12 @@ local function read_tcp(sock, routemap)
 	while true do
 		local req = warp.request(sock, addr, true)
 		-- Read query off socket
-		local ok, err = go.tcprecv(sock, req.query.wire, req.query.max_size)
+		local ok, err = nb.tcprecv(sock, req.query)
 		if ok == 0 then break end
 		if not ok then req:log('error', err) break end
 		-- Spawn off new coroutine for request
 		req.query.size = ok
-		ok, err, co = go(warp.serve, req, writer_tcp, routemap)
+		ok, err, co = nb.go(warp.serve, req, writer_tcp, routemap)
 		if not ok then req:log('error', '%s, %s', err, debug.traceback(co)) end
 		queries = queries + 1
 	end
@@ -41,48 +41,54 @@ end
 
 -- Bind to sockets and start serving
 local function udp(host, port, iface)
-	-- Create bound sockets
-	local msg, addr = string.format('udp "%s#%d: ', host, port), go.addr(host, port)
-	local sock, err = go.socket(addr)
-	if not sock then error(msg .. err) end
-	warp.vlog(nil, msg .. 'listening')
+	local sock = nb.socket(nb.family(host), 'dgram')
+	sock:bind(host, port)
+	warp.vlog(nil, string.format('udp "%s#%d: listening', host, port))
 	local addr, ok, err, co = sock:getsockname(), 0
-	for _ = 1, go.max_coroutines/4 do
-		go(function()
+	for _ = 1, concurrency_backpressure/4 do
+		nb.go(function()
+			local addr = nb.addr()
+			local n = 0
 			while ok do
 				-- Fetch next request off freelist
 				local req = warp.request(sock, addr)
-				ok, err = go.udprecv(sock, req.query.wire, req.query.max_size, addr)
+				ok, err = nb.udprecv(sock, req.query, addr)
 				if ok then
 					req.query.size = ok
 					ok, err, co = pcall(warp.serve, req, writer_udp, iface.match)
 				end
-				if err then req:log('error', '%s, %s', err, debug.traceback(co)) end
+				if err then
+					req:log('error', '%s, %s', err, debug.traceback(co))
+				end
 			end
 		end)
 	end
 end
 
 local function tcp(host, port, iface)
-	-- Create bound sockets
-	local msg, addr = string.format('tcp "%s#%d: ', host, port), go.addr(host, port)
-	local tcp, err = go.socket(addr, true)
-	if not tcp then error(msg .. err) end
-	warp.vlog(nil, msg .. 'listening')
-	go(function ()
-		local addr, ok, err = tcp:getsockname(), 0
+	local sock = nb.socket(nb.family(host), 'stream')
+	sock:bind(host, port)
+	warp.vlog(nil, string.format('tcp "%s#%d: listening', host, port))
+	nb.go(function ()
+		local ok, err = true
 		while ok do
-			ok, err = go(read_tcp, go.accept(tcp), iface.match)
-			if err then warp.log({addr=addr}, 'error', tostring(err)) end
+			-- Backpressure for new clients
+			while nb.coroutines > concurrency_backpressure do
+				coroutine.yield()
+			end
+			ok, err = nb.go(read_tcp, sock:accept(), iface.match)
+			if err then
+				warp.log({addr=nb.addr(port, host)}, 'error', tostring(err))
+			end
 		end
 	end)
 end
 
 local function tls(host, port, iface)
 	-- Create bound sockets
-	local msg, addr = string.format('tls "%s#%d: ', host, port), go.addr(host, port)
-	local tcp, err = go.socket(addr, true)
-	if not tcp then error(msg .. err) end
+	local msg = string.format('tls "%s#%d: ', host, port)
+	local sock = nb.socket(nb.family(host), 'stream')
+	sock:bind(host, port)
 	-- Open X.509 credentials and create TLS connection upgrade closure
 	local tls = require('dns.tls')
 	local cred, err = tls.creds.x509(iface.opt)
@@ -92,11 +98,13 @@ local function tls(host, port, iface)
 		return read_tcp(sock, routemap)
 	end
 	warp.vlog(nil, msg .. 'listening')
-	go(function ()
-		local addr, ok, err = tcp:getsockname(), 0
+	nb.go(function ()
+		local ok, err = true
 		while ok do
-			ok, err = go(read_tls, go.accept(tcp), iface.match)
-			if err then warp.log({addr=addr}, 'error', tostring(err)) end
+			ok, err = nb.go(read_tls, sock:accept(), iface.match)
+			if err then
+				warp.log({addr=nb.addr(port, host)}, 'error', tostring(err))
+			end
 		end
 	end)
 end
@@ -109,31 +117,26 @@ local function write_http(req, msg, code, ctype)
 end
 
 local function read_http(sock, req, route)
-	local addr = sock:getpeername()
-	req.sock, req.addr = sock, addr
+	req.sock, req.addr = sock, S.getpeername(sock.fd)
 	-- TODO: worry about partial header reads
-	local buf = S.t.buffer(512)
-	local nread = go.nbrecv(req.sock, buf, 512, true)
-	if nread and nread > 0 then
-		local headers = ffi.string(buf, nread)
-		req.method, req.url, req.proto = headers:match('(%S+)%s(%S+)%s([^\n]+)')
-		-- Serve API call
+	local msg = assert(sock:receive())
+	if msg then
+		req.method, req.url, req.proto = msg:match('(%S+)%s(%S+)%s([^\n]+)')
 		local ok, err = pcall(warp.api, req, write_http, route)
-		if not ok then warp.log({addr=addr}, 'error', err) end
+		if not ok then warp.log(req, 'error', err) end
 	end
 	sock:close()
 end
 
 local function http(host, port, iface)
-	local msg, addr = string.format('interface "%s#%d: ', host, port), go.addr(host, port)
-	local tcp, err = go.socket(addr, true)
-	if not tcp then error(msg..err) end
-	go(function ()
-		local addr, ok, err = tcp:getsockname(), 0
+	local sock = nb.socket(nb.family(host), 'stream')
+	sock:bind(host, port)
+	nb.go(function ()
+		local ok, err = true
 		while ok do
 			local req = {}
-			ok, err = go(read_http, go.accept(tcp), req, iface.match)
-			if err then warp.log({addr=addr}, 'error', tostring(err)) end
+			ok, err = nb.go(read_http, sock:accept(), req, iface.match)
+			if err then warp.log(req, 'error', tostring(err)) end
 		end
 	end)
 end
@@ -178,7 +181,7 @@ end
 
 -- Run coroutines
 while true do
-	local ok, err, co = go.run(1)
+	local ok, err, co = nb.run(1)
 	if not ok then
 		warp.log(nil, 'error', '%s, %s', err, debug.traceback(co))
 	end

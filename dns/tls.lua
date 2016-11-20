@@ -1,5 +1,5 @@
 local ffi = require('ffi')
-local bit = require('bit')
+local nb = require('dns.nbio')
 local gnutls = ffi.load('gnutls')
 local S = require('syscall')
 local c = S.c
@@ -121,20 +121,36 @@ ffi.metatype('tls_session_t', {
         self:close()
     end,
     __index = {
-        getfd = function (self)
-            return self.fd
-        end,
         send = function (self, msg, len)
             local ret = gnutls.gnutls_record_send(self.session[0], msg, len or #msg)
-            if ret == err.AGAIN then return nil, S.t.error(c.E.AGAIN) end -- Map EAGAIN code
+            while ret == err.AGAIN do
+                coroutine.yield(nb.writers, self.fd)
+                ret = gnutls.gnutls_record_send(self.session[0], msg, len or #msg)
+            end
             if ret < 0 then return nil, {errno=c.E.IO, strerr=gnutls.gnutls_strerror(ret)} end
             return ret
         end,
-        recv = function (self, buf, buflen)
-            buf = ffi.cast('char *', buf)
+        receive = function (self, buflen, buf)
+            buflen = buflen or 512
+            -- Allocate buffer for receiving
+            local copy
+            if buf then
+                buf = ffi.cast('char *', buf)
+            else
+                buf = ffi.new('char [?]', buflen)
+                copy = true
+            end
+            -- Receive record or wait until ready
             local ret = gnutls.gnutls_record_recv(self.session[0], buf, buflen)
-            if ret == err.AGAIN then return nil, c.E.AGAIN end -- Map EAGAIN code
+            while ret == err.AGAIN do
+                coroutine.yield(nb.readers, self.fd)
+                ret = gnutls.gnutls_record_recv(self.session[0], buf, buflen)
+            end
             if ret < 0 then return nil, {errno=c.E.IO, strerr=gnutls.gnutls_strerror(ret)} end
+            -- If we allocated buffer, return immutable copy
+            if copy then
+                return ffi.string(buf, ret)
+            end
             return ret
         end,
         getpeername = function (self)
@@ -197,7 +213,7 @@ local function handshake(s)
     gnutls.gnutls_handshake_set_timeout(s.session[0], default.HANDSHAKE_TIMEOUT)
     local ret = gnutls.gnutls_handshake(s.session[0])
     while ret < 0 and gnutls.gnutls_error_is_fatal(ret) == 0 do
-        if ret == err.AGAIN then coroutine.yield(nil, s) end
+        if ret == err.AGAIN then coroutine.yield(nil, s.fd) end
         ret = gnutls.gnutls_handshake(s.session[0])
     end
     if ret < 0 then
@@ -209,7 +225,7 @@ end
 -- Create TLS session
 -- https://www.gnutls.org/manual/html_node/Simple-client-example-with-X_002e509-certificate-support.html#Simple-client-example-with-X_002e509-certificate-support
 local function session(sock, flag, cred)
-    local s = ffi.new('tls_session_t', {nil}, sock:nogc():getfd())
+    local s = ffi.new('tls_session_t', {nil}, sock.fd)
     -- Initialize TLS session
     gnutls.gnutls_init(s.session, flag + flags.NONBLOCK)
     local ret = gnutls.gnutls_set_default_priority(s.session[0])

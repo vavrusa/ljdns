@@ -12,8 +12,8 @@ M.key = key
 local function add(dst, section, copy)
 	local count = 0
 	for _, rr in ipairs(section) do
-		rr = copy and rr:copy() or rr
-		table.insert(dst, rr)
+		if copy then rr = rr:copy() end
+		dst[#dst + 1] = rr
 		count = count + 1
 	end
 	return count
@@ -50,7 +50,7 @@ local function serve(self, req)
 	-- Restore RCODE and flags
 	req.answer:rcode(val[6])
 	local aa, dobit = val[6], val[7]
-	req.answer:aa(req.opt, aa)
+	req.answer:aa(aa)
 	dns.edns.dobit(req.opt, dobit)
 	-- Do not cache the result
 	req.nocache = true
@@ -61,7 +61,7 @@ local function serve(self, req)
 end
 
 local function complete(self, req)
-	if req.nocache then return end
+	if not req.nocache then
 	local rrs, an, ns, ar = {}
 	an = add(rrs, req.answer, true)
 	ns = add(rrs, req.authority)
@@ -77,6 +77,7 @@ local function complete(self, req)
 		req:vlog('caching %d/%d/%d rcode: %s ttl: %d',
 		         an, ns, ar, dns.tostring.rcode[rcode], ttl)
 	end
+end
 end
 
 function M.init(conf)

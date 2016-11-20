@@ -32,11 +32,12 @@ build = {
     bin = {
       zq = "tools/zq.lua",
       ldig = "tools/ldig.lua",
-      namepile = "tools/namepile.lua",
     }
   },
   modules = {
     ["dns.nbio"] = "dns/nbio.lua",
+    ["dns.nbio.syscall"] = "dns/nbio/syscall.lua",
+    ["dns.nbio.openresty"] = "dns/nbio/openresty.lua",
     ["dns.rrparser"] = "dns/rrparser.lua",
     ["dns.sift"] = "dns/sift.lua",
     ["dns.utils"] = "dns/utils.lua",

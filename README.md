@@ -13,7 +13,7 @@ make install
 ### Requirements
 
 - [LuaJIT 2.x][libknot] - PUC-RIO Lua doesn't have the FFI module.
-- [libknot][libknot] - isn't bundled, and must be [installed separately][knot-readme].
+- [libknot 2.3+][libknot] - isn't bundled, and must be [installed separately][knot-readme].
 
 
 ## Tools
@@ -680,7 +680,7 @@ This means it parsed and loaded a zone with million records into memory under 2 
 
 ## Non-blocking I/O
 
-The library comes with easy asynchronous socket I/O and scoped coroutines, this means you can write sequential code and get free concurrency when coroutine would block instead. As the coroutines are
+The library comes with simple non-blocking socket I/O and coroutines, this means you can write sequential code and get free concurrency when coroutine would block instead. As the coroutines are
 scoped, you can nest coroutines and tie their lifetime to sockets they block on.
 
 The asynchronous I/O is based on [ljsyscall][ljsyscall] and uses `epoll/kqueue` when possible. It also supports [TCP Fast Open][tcp-fastopen] and `SO_REUSEPORT` when available.
@@ -688,101 +688,84 @@ The asynchronous I/O is based on [ljsyscall][ljsyscall] and uses `epoll/kqueue` 
 You can create coroutines, very much like in Go language.
 
 ```lua
-local go = dns.nbio
-go(function ()
+local nb = require('dns.nbio')
+nb.go(function ()
 	print('Hi from Alice!')
 end)
-go(function ()
+nb.go(function ()
 	print('Hi from Bob!')
 end)
-assert(go.run())
+assert(nb.run())
 ```
 
 You don't have to let coroutines take over main program loop and instead use a poll style API.
 
 ```lua
-go(function ()
+nb.go(function ()
 	print('Hi from Bob!')
 end)
-assert(go.step(1)) -- Only one step with 1s timeout
+assert(nb.step(1)) -- Only one step with 1s timeout
 ```
 
 ### TCP example
 
-When inside coroutines, you can use `dns.nbio` functions instead of socket meta methods.
-Let's make a listener and a client and make them exchange messages.
+The `nbio` library allows you to create non-blocking sockets with `nbio.socket()` function.
+The sockets follow the same API as OpenResty [non-blocking sockets](https://github.com/openresty/lua-nginx-module#ngxsocketudp) or [LuaSocket](http://w3.impa.br/~diego/software/luasocket/reference.html).
+
+These sockets can be used anywhere inside coroutines, not in the main thread as it cannot be suspended if socket needs to wait for readiness. Let's make a listener and a client and make them exchange messages.
 
 ```lua
-local go = dns.nbio
-local addr = go.addr('127.0.0.1', 0) -- Make address object
-local master = go.socket(addr, true) -- Make bound socket
-assert(go(function ()                -- First coroutine acts as server
-	local bob = go.accept(master)    -- Accept TCP connection
-	go.tcpsend(bob, 'PING')          -- Send query
-	local msg, err = go.tcprecv(bob) -- Receive response
+local master = nb.socket('inet', 'stream')
+master:bind('127.0.0.1', 0)
+nb.go(function ()                   -- First coroutine acts as server
+	local bob = master:accept()     -- Accept TCP connection
+	bob:send('PING')                -- Send query
+	local msg, err = bob:receive(4) -- Receive response
 	assert(msg == 'PONG')
-end))
+end)
 
-assert(go(function ()
-	local alice = go.socket('inet', true)   -- Make unbound TCP socket
-	go.connect(alice, master:getsockname()) -- Connect to TCP server
-	local msg, err = go.tcprecv(alice)      -- Wait for query
+local host, port = master:getsockname()
+nb.go(function ()
+	local alice = nb.socket('inet', 'stream') -- Make unbound TCP socket
+	alice:connect(host, port)                 -- Connect to TCP server
+	local msg, err = alice:receive(4)         -- Wait for query
 	assert(msg == 'PING')
-	go.tcpsend(alice, 'PONG')               -- Send back response
-end))
+	alice:send('PONG')                        -- Send back response
+end)
 
-assert(go.run(1))
+assert(nb.run(1))
 ```
 
 ### Using TCP Fast Open
 
 For bound sockets it is enabled automatically. If you want to initiate a TFO connection,
-pass a message and address to `connect()` call in addition address. If possible,
-the library will start TFO or fall back to `connect + send` transparently.
+pass a message and address to `connect()` call in addition to host and port. If possible,
+the library will start TFO or fall back to `connect() + send()` transparently.
 
 ```lua
-go(function()
-	local client = go.socket('inet', true) -- Make unbound TCP socket
-	go.connect(client, addr, 'PING', 4)    -- Attempt TFO or connect + send
-	local msg, err = go.recv(client)       -- Receive response (client is connected)
-	print('Received:', msg)
+nb.go(function()
+	local client = nb.socket('inet', 'stream') -- Make unbound TCP socket
+	client:connect('127.0.0.1', 8080, 'PING')  -- Attempt TFO or connect + send
+	local msg, err = client:recv(4)            -- Receive response (client is connected)
+	print('Received:', msg, err)
 end)
 ```
 
 ### UDP example
 
 Both connected and unconnected UDP sockets are supported. Connected sockets are used in the same way
-as TCP sockets in a way that address doesn't have to be provided. Make sure to use `udp{recv|send}()` function counterparts, as in DNS/TCP messages are prefixed with their length, but not in DNS/UDP.
+as TCP sockets in a way that address doesn't have to be provided.
 
 ```lua
-go(function()
-	-- Make connected UDP socket
-	local client = go.socket('inet')            
-	go.connect(client, go.addr('193.0.14.129'))
+nb.go(function()
+	local client = nb.socket('inet', 'dgram') -- Make connected UDP socket
+	client:connect('193.0.14.129', 53)        -- Alternative to setpeername()
 	-- Make root NS question
 	local msg = dns.packet(64)
 	msg:question('\0', dns.type.NS)
-	-- Send DNS message and receive response
-	go.udpsend(client, msg:towire())
-	local msg = assert(go.udprecv(client))
+	client:send(msg:towire())                 -- Send DNS message and receive response
+	local msg = client:receive()
 	print('received', dns.hexdump(msg))
-end)
-```
-
-For unconnected sockets, you have to provide valid address to `udpsend()` to make it work.
-
-```lua
-go(function()
-	-- Make unconnected UDP socket
-	local addr = go.addr('193.0.14.129')
-	local client = go.socket('inet')
-	-- Make root NS question
-	local msg = dns.packet(64)
-	msg:question('\0', dns.type.NS)     
-	-- Send DNS message and receive response
-	go.udpsend(client, msg:towire(), nil, addr)
-	local msg, sa = go.udprecv(client)
-	print('received from', sa.addr, sa.port, dns.hexdump(msg))
 end)
 ```
 
@@ -792,24 +775,24 @@ The coroutines provide you with an easy concurrency for UDP sockets without call
 allowing for push-pull, circular queue and single-listener modes.
 
 ```lua
-local udp = go.socket(go.addr('127.0.0.1')) -- Make UDP server socket
+local udp = nb.socket('127.0.0.1', 53) -- Make UDP server socket
 -- Writer
 local function serve(sock, msg, saddr)
-	-- Parse and flip QR=1
+	-- Zero-copy parse and flip QR=1
 	local pkt = dns.packet(#msg, msg)
 	assert(pkt:parse())
 	pkt:qr(true)
 	-- Send the packet back
-	go.udpsend(udp, msg.wire, msg.size, saddr)
+	nb.udpsend(msg, saddr)
 end
 -- Reader
-assert(go(function ()
+nb.go(function ()
 	while true do
-		local msg, addr = go.udprecv(udp)
+		local msg, addr = nb.udprecv(udp)
 		local ok, err = pcall(serve, msg, addr)
 		if not ok then print(err) end
 	end
-end))
+end)
 ```
 
 ### Gotchas
@@ -819,15 +802,13 @@ Performance PRO TIP is to avoid creating closures in loops, as that aborts trace
 ```lua
 -- Create a function elsewhere
 local function serve(sock, msg)
-	print('received', sock:getfd(), #msg)
+	print('received', #msg)
 end
--- Now in the tight loop...
+-- Now reuse the closure "serve()"
 while true do
-	assert(go(serve, sock, go.recv(sock)))
+	assert(go(serve, sock, nb.recv(sock)))
 end
 ```
-
-Also, a single socket may have only 1 reader and 1 writer at the same time. Use socket dup'ing to avoid multiple coroutines blocking on the same socket.
 
 ## DNS over TLS
 
@@ -840,17 +821,24 @@ local cred = tls.creds.x509 {
 	certfile = 'test.crt',
 	keyfile = 'test.key',
 }
-local client = go.accept(server)
 -- Upgrade to TLS with X.509 certificate
-client = assert(tls.server(client, cred))
-local ret, err = go.tcprecv(client)
+local server = nb.socket('inet', 'stream')
+server:bind('127.0.0.1', 53)
+nb.go(function()
+	local client = server:accept()
+	client = assert(tls.server(client, cred))
+	local ret, err = client:receive()
+	print('tls received:', ret, err)
+end)
+assert(nb.run())
 ```
 
 Client code works similarly, unfortunately DNS/TLS cannot be used together with [TFO][tcp-fastopen] because the handshake is done by the underlying library (GnuTLS) over already connected socket.
 
 ```lua
-local client = go.socket('inet', true)
-go.connect(client, server:getsockname())
+-- Connect to remote server
+local client = nb.socket('inet', 'stream')
+client:connect(...)
 -- Upgrade to TLS without X.509 client certificate
 client = assert(tls.client(client, 'x509'))
 ```

@@ -139,6 +139,6 @@ $ mkdir pile
 $ echo "$ORIGIN example" > pile/example.zone
 $ echo "@ 3600 IN SOA dns hostmaster 0 10800 3600 1209600 60" >> pile/example.zone
 $ echo -e "@ 3600 IN NS ns1\nns1 3600 IN A 1.2.3.4" >> pile/example.zone
-$ namepile -v pile @127.0.0.1#4242 &
+$ namepile pile @127.0.0.1#4242 &
 $ ldig AXFR @127.0.0.1#4242 example.
 ```
