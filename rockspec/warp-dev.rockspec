@@ -13,7 +13,7 @@ description = {
    license = "BSD"
 }
 dependencies = {
-   "ljdns >= 0.4",
+   "ljdns >= 0.5",
 }
 build = {
   type = "builtin",
