@@ -23,6 +23,10 @@ local function serve(self, req, writer)
 		local rr = dns.rrset(qname, dns.type.TXT)
 		           :add(dns.rdata.txt(string.format('%d', os.time())))
 		req.answer:put(rr, true)
+		-- Synthesise TZ offset
+		rr = dns.rrset(qname, dns.type.TXT)
+			 :add(dns.rdata.txt(string.format('%s', os.date("%z"))))
+		req.answer:put(rr, true)
 		req.answer:aa(true)
 		req.nocache = true
 	end
