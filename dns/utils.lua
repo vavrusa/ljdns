@@ -49,7 +49,7 @@ function utils.addrparse(s)
 end
 
 -- FFI + C code
-local knot = utils.clib('libknot', {2,3})
+local knot = utils.clib('libknot', {2,3,4})
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
 /* libc */

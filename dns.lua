@@ -5,7 +5,7 @@ local bit = require('bit')
 local math = require('math')
 local utils = require('dns.utils')
 local n16, n32 = utils.n16, utils.n32
-local knot = utils.clib('libknot', {2,3})
+local knot = utils.clib('libknot', {2,3,4})
 
 ffi.cdef[[
 /*
