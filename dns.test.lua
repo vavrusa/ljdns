@@ -130,36 +130,6 @@ copy = nil
 collectgarbage()
 print('[ OK ] dns.packet.answer')
 
--- Test TSIG signing
-pkt:qr(false)
-assert(dns.tsig('bad-') == nil)
-local tsig_alice = dns.tsig('testkey:Wg==')
-local tsig_bob = dns.tsig('testkey:Wg==')
-local tsig_badkey = dns.tsig('badkey:Wg==')
-local tsig_badsig = dns.tsig('testkey:YQo=')
-assert(tsig_alice ~= nil)
-assert(tsig_bob ~= nil)
-assert(tsig_alice:sign(pkt))
-collectgarbage()
-print('[ OK ] dns.tsig.sign')
-copy = pkt:copy()
-assert(tsig_bob:verify(copy) == true)
-assert(tsig_badkey:verify(copy) == dns.rcode_tsig.BADKEY)
-assert(tsig_badsig:verify(copy) == dns.rcode_tsig.BADSIG)
-print('[ OK ] dns.tsig.verify')
-copy:qr(true) -- Make it a response
-assert(tsig_bob:sign(copy))
-assert(tsig_alice:verify(copy) == true)
-collectgarbage()
-print('[ OK ] dns.tsig.exchange')
-tsig_bob = nil
-tsig_alice = nil
-collectgarbage()
-copy = nil
-pkt = nil
-collectgarbage()
-print('[ OK ] dns.tsig')
-
 -- Test RR parser
 local rrparser = require('dns.rrparser')
 local fname = 'examples/example.com.zone'

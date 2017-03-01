@@ -120,7 +120,7 @@ local function read_http(sock, req, route)
 	req.sock, req.addr = sock, S.getpeername(sock.fd)
 	-- TODO: worry about partial header reads
 	local msg = assert(sock:receive())
-	if msg then
+	if msg and #msg > 0 then
 		req.method, req.url, req.proto = msg:match('(%S+)%s(%S+)%s([^\n]+)')
 		local ok, err = pcall(warp.api, req, write_http, route)
 		if not ok then warp.log(req, 'error', err) end

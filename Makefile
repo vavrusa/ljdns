@@ -15,10 +15,10 @@ CLIB := kdns_clib.$(LIBEXT)
 # Rules
 all: check
 check: $(addsuffix .test,$(OBJS))
-	@echo "[*] unit tests"
-	@busted --lua=$(LUA) -o TAP
 	@echo "[*] static analysis"
 	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua warp/vendor warp/config.lua
+	@echo "[*] unit tests"
+	@busted --lua=$(LUA) -o TAP
 clean:
 	$(RM) $(CLIB)
 $(CLIB): src/utils.c src/murmurhash3.c

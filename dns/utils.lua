@@ -27,7 +27,7 @@ end
 function utils.clib(soname, versions)
 	for _, v in pairs(versions) do
 		local ok, lib = pcall(ffi.load, utils.libname(soname, tostring(v)))
-		if ok then return lib end
+		if ok then return lib, v end
 	end
 end
 
@@ -49,7 +49,7 @@ function utils.addrparse(s)
 end
 
 -- FFI + C code
-local knot = utils.clib('libknot', {2,3,4})
+local knot, knot_version = utils.clib('libknot', {5})
 local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
 ffi.cdef[[
 /* libc */
@@ -72,6 +72,10 @@ int knot_dname_size(const uint8_t *name);
 void MurmurHash3_x86_32  ( const void * key, int len, uint32_t seed, void * out );
 void MurmurHash3_x64_128 ( const void * key, int len, uint32_t seed, void * out );
 ]]
+
+-- Export library
+utils.knot = knot
+utils.knot_version = knot_version
 
 -- Latency bucket
 utils.bucket = cutil.bucket

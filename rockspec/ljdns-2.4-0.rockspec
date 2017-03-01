@@ -1,8 +1,7 @@
 package = "ljdns"
-version = "0.5-0"
+version = "2.4-0"
 source = {
-   url = "git://github.com/vavrusa/ljdns",
-   tag = "v0.5"
+   url = "git://github.com/vavrusa/ljdns"
 }
 description = {
    summary = "A contemporary DNS library focused on performance using LuaJIT FFI.",

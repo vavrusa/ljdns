@@ -5,7 +5,7 @@ local bit = require('bit')
 local math = require('math')
 local utils = require('dns.utils')
 local n16, n32 = utils.n16, utils.n32
-local knot = utils.clib('libknot', {2,3,4})
+local knot = utils.knot
 
 ffi.cdef[[
 /*
@@ -90,7 +90,7 @@ int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uin
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
-int knot_rrset_txt_dump(const knot_rrset_t *rrset, char *dst, size_t maxlen, const knot_dump_style_t *style);
+int knot_rrset_txt_dump(const knot_rrset_t *rrset, char **dst, size_t *maxlen, const knot_dump_style_t *style);
 int knot_rrset_txt_dump_data(const knot_rrset_t *rrset, size_t pos, char *dst, size_t maxlen, const knot_dump_style_t *style);
 int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);
 /* opt rr */
@@ -266,10 +266,10 @@ local const_opt_str = utils.itable(const_opt)
 -- @note this expects libknot error codes don't change
 local const_errcode_tsig = {
 	[0] = true,
-	[-948] = const_rcode_tsig.BADSIG,
-	[-947] = const_rcode_tsig.BADKEY,
-	[-946] = const_rcode_tsig.BADTIME,
-	[-945] = const_rcode_tsig.BADTRUNC,
+	[-947] = const_rcode_tsig.BADSIG,
+	[-946] = const_rcode_tsig.BADKEY,
+	[-945] = const_rcode_tsig.BADTIME,
+	[-944] = const_rcode_tsig.BADTRUNC,
 }
 
 -- Check if type is meta type
@@ -592,7 +592,9 @@ ffi.metatype( knot_rrset_t, {
 					ret = knot.knot_rrset_txt_dump_data(rr, i, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
 				else
 					if rr.raw_owner == nil then return end -- Uninitialised RR set
-					ret = knot.knot_rrset_txt_dump(rr, rrset_buf, rrset_buflen, knot.KNOT_DUMP_STYLE_DEFAULT)
+					local buf = ffi.new('char *[1]', rrset_buf)
+					local len = ffi.new('size_t [1]', rrset_buflen)
+					ret = knot.knot_rrset_txt_dump(rr, buf, len, knot.KNOT_DUMP_STYLE_DEFAULT)
 				end
 				if ret < 0 then return nil, strerr(ret) end
 				return ffi.string(rrset_buf)

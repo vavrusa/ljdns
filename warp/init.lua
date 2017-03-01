@@ -5,7 +5,7 @@ local gettime = require('dns.nbio').now
 -- Logging code
 local function log(req, level, msg, ...)
 	if not msg then return end
-	if req and type(req) == 'table' then
+	if type(req) == 'table' and req.addr then
 		req = string.format('%s#%d ', req.addr.addr, req.addr.port)
 	end
 	print(string.format('[%s] %s%s', level, req or '', string.format(msg, ...)))
@@ -86,7 +86,7 @@ end
 local function log_answer(req)
 	-- Log by RCODE
 	local rcode = req.answer:rcode()
-	if rcode == 0 and req.answer:empty() then
+	if rcode == 0 and req.answer:ancount() == 0 then
 		rcode = 'nodata'
 	else
 		rcode = rcodes[rcode]
@@ -182,6 +182,9 @@ end
 
 -- Serve API call
 function M.api(req, writer, routemap)
+	if not req then
+		return
+	end
 	local route, step, endpoint, url = req.url:match('^(/[^/]+)/([^/]+)/([^/]+)(.*)')
 	if not route then
 		return writer(req, '', '404 No such API')

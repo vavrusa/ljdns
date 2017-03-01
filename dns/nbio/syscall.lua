@@ -280,6 +280,7 @@ end
 
 -- Create platform-specific poller
 -- (Taken from ljsyscall examples)
+local function nilf() return nil end
 local poll
 if S.epoll_create then
 	poll = {
@@ -305,7 +306,11 @@ if S.epoll_create then
 			return p.fd:epoll_ctl(c.EPOLL_CTL.DEL, s, ev)
 		end,
 		get = function(p)
-			return p.fd:epoll_wait(p.events)
+			local f, a, r = p.fd:epoll_wait(p.events)
+			if not f then
+				return nilf
+			end
+			return f, a, r
 		end,
 		eof = function(ev) return ev.HUP or ev.ERR or ev.RDHUP end,
 		ein = function(ev) return bit.band(ev.events, c.EPOLL.IN) ~= 0 end,
@@ -334,7 +339,11 @@ elseif S.kqueue then
 			return p.fd:kevent(p.event, nil)
 		end,
 		get = function(p, timeout)
-			return p.fd:kevent(nil, p.events, timeout)
+			local f, a, r = p.fd:kevent(nil, p.events, timeout)
+			if not f then
+				return nilf
+			end
+			return f, a, r
 		end,
 		arm = function (p, timeout, fd)
 			local ev = p.event.kev[0]
@@ -355,6 +364,9 @@ else
 end
 
 -- Coroutines implementation
+local pollfd = assert(poll:init(512))
+M.backend = 'syscall'
+M.pollfd = pollfd
 M.coroutines = 0
 M.readers = {}
 M.writers = {}
@@ -379,7 +391,7 @@ local function enqueue(waitlist, co, fd)
 		table.insert(queue, co)
 	end
 	if fd > -1 then
-		assert(M.pollfd:add(fd, waitlist == M.writers))
+		assert(pollfd:add(fd, waitlist == M.writers))
 	end
 end
 
@@ -388,7 +400,7 @@ local function dequeue(waitlist, fd)
 	local queue = waitlist[fd]
 	table.remove(queue, 1)
 	if not queue[1] then
-		M.pollfd:del(fd, waitlist == M.writers)
+		pollfd:del(fd, waitlist == M.writers)
 	else
 		sweep(queue)
 	end
@@ -417,7 +429,7 @@ local function resume(curlist, fd)
 	end
 	-- Set deadline
 	if deadline then
-		M.pollfd:arm(deadline, fd)
+		pollfd:arm(deadline, fd)
 	end
 	return true
 end
@@ -434,13 +446,13 @@ function M.go(closure, ...)
 	M.coroutines = M.coroutines + 1
 	-- Set deadline
 	if deadline then
-		M.pollfd:arm(deadline, fd)
+		pollfd:arm(deadline, fd)
 	end
 	return co
 end
 
 function M.step(timeout)
-	local pollfd, ok, err, co = M.pollfd, true, nil, nil
+	local ok, err, co = true, nil, nil
 	for _, ev in pollfd:get(timeout) do
 		-- Stop listening when error is encountered
 		if pollfd.eof(ev) then
@@ -566,9 +578,5 @@ function M.tcpxchg(sock, msg, rmsg, copy)
 	-- Receive messages and resume coroutine
 	return M.tcprecv(sock, rmsg, pipeline, id)
 end
-
--- Module interface
-M.backend = 'syscall'
-M.pollfd = poll:init(4096)
 
 end

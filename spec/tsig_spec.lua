@@ -1,0 +1,33 @@
+describe('tsig', function()
+	local dns = require('dns')
+
+	it('basic operations', function ()
+		-- Create test packets
+		local pkt = dns.packet(512)
+		pkt:qr(false)
+		pkt:question('\4test', dns.type.SOA)
+		pkt:begin(dns.section.ANSWER)
+		pkt:put(dns.rrset('\3com', dns.type.NS))
+		-- Test TSIG creation
+		assert.falsy(dns.tsig('bad-'))
+		local tsig_alice = dns.tsig('testkey:Wg==')
+		local tsig_bob = dns.tsig('testkey:Wg==')
+		local tsig_badkey = dns.tsig('badkey:Wg==')
+		local tsig_badsig = dns.tsig('testkey:YQo=')
+		assert.truthy(tsig_alice)
+		assert.truthy(tsig_alice)
+		assert.truthy(tsig_bob)
+		-- Test signing and verification
+		assert.truthy(tsig_alice:sign(pkt))
+		collectgarbage()
+		local copy = pkt:copy()
+		assert.truthy(tsig_bob:verify(copy))
+		assert.same(dns.rcode_tsig.BADKEY, tsig_badkey:verify(copy))
+		assert.same(dns.rcode_tsig.BADSIG, tsig_badsig:verify(copy))
+		-- Test response verification
+		copy:qr(true)
+		assert.truthy(tsig_bob:sign(copy))
+		assert.truthy(tsig_alice:verify(copy))
+		collectgarbage()
+	end)
+end)

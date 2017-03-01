@@ -18,6 +18,7 @@ local flags = {
 -- GnuTLS defaults
 local default = {
     HANDSHAKE_TIMEOUT = -1,
+    NAME_DNS = 1,
 }
 
 -- Credentials type
@@ -27,6 +28,21 @@ local crd = {
     SRP         = 3,
     PSK         = 4,
     IA          = 5
+}
+
+-- Security parameters
+local sec_param = {
+    UNKNOWN = 0,
+    INSECURE = 5,
+    EXPORT = 10,
+    VERY_WEAK = 15,
+    WEAK = 20,
+    LOW = 25,
+    LEGACY = 30,
+    MEDIUM = 35,
+    HIGH = 40,
+    ULTRA = 45,
+    FUTURE = 50
 }
 
 -- X.509 certificate format
@@ -114,6 +130,7 @@ ssize_t gnutls_record_recv(gnutls_session_t session, void *data, size_t data_siz
 int gnutls_priority_set_direct(gnutls_session_t session, const char *priorities, const char **err_pos);
 void gnutls_certificate_server_set_request(gnutls_session_t session, gnutls_certificate_request_t req);
 int gnutls_certificate_set_x509_system_trust(gnutls_certificate_credentials_t cred);
+int gnutls_certificate_set_known_dh_params(gnutls_certificate_credentials_t res, int sec_param);
 ]]
 
 ffi.metatype('tls_session_t', {
@@ -166,8 +183,8 @@ ffi.metatype('tls_session_t', {
 })
 
 -- Check GnuTLS version before initializing
-if gnutls.gnutls_check_version('3.3.0') == nil then
-    error('GnuTLS 3.3.0 or later is required')
+if gnutls.gnutls_check_version('3.4.6') == nil then
+    error('GnuTLS 3.4.6 or later is required')
 end
 
 local creds = {open = {}}
@@ -195,6 +212,9 @@ function creds.x509(tbl)
         ret = gnutls.gnutls_certificate_set_x509_key_file(cred.data[0], tbl.certfile, tbl.keyfile, x509_crt_fmt.PEM)
         if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
     end
+    -- Set security parameters
+    ret = gnutls.gnutls_certificate_set_known_dh_params(cred.data[0], tbl.sec_param or sec_param.MEDIUM)
+    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
     table.insert(creds.open, cred)
     return cred
 end
@@ -225,13 +245,17 @@ end
 -- Create TLS session
 -- https://www.gnutls.org/manual/html_node/Simple-client-example-with-X_002e509-certificate-support.html#Simple-client-example-with-X_002e509-certificate-support
 local function session(sock, flag, cred)
+    local ret
     local s = ffi.new('tls_session_t', {nil}, sock.fd)
     -- Initialize TLS session
     gnutls.gnutls_init(s.session, flag + flags.NONBLOCK)
-    local ret = gnutls.gnutls_set_default_priority(s.session[0])
-    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
-    ret = gnutls.gnutls_priority_set_direct(s.session[0], 'NORMAL', nil)
-    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    if flag == flags.CLIENT then
+        ret = gnutls.gnutls_set_default_priority(s.session[0])
+        if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    else
+        ret = gnutls.gnutls_priority_set_direct(s.session[0], 'PERFORMANCE:%SERVER_PRECEDENCE', nil)
+        if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    end
     -- Set X.509 credentials (if provided)
     if cred then
         ret = gnutls.gnutls_credentials_set(s.session[0], crd.CERTIFICATE, cred.data[0])

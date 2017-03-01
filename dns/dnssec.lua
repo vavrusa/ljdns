@@ -114,6 +114,7 @@ typedef struct {
 	uint16_t zsk_size;
 	uint32_t dnskey_ttl;
 	uint32_t zsk_lifetime;
+	bool singe_type_signing;
 	uint32_t rrsig_lifetime;
 	uint32_t rrsig_refresh_before;
 	bool nsec3_enabled;
@@ -209,14 +210,19 @@ end
 -- RDATA digest size for given algorithm
 local algorithms = {
 	invalid = 0,
+	dh = 1,
+	dsa = 2,
 	dsa_sha1 = 3,
 	rsa_sha1 = 5,
 	dsa_sha1_nsec3 = 6,
 	rsa_sha1_nsec3 = 7,
 	rsa_sha256 = 8,
 	rsa_sha512 = 10,
+	ecc_gost = 12,
 	ecdsa_p256_sha256 = 13,
 	ecdsa_p384_sha384 = 14,
+	ed25519 = 15,
+	ed448 = 16,
 }
 
 -- KASP key state

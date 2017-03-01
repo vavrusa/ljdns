@@ -5,6 +5,15 @@ It supports all widely used DNS records (DNSSEC included) with a lean and mean A
 
 ## Installation
 
+From LuaRocks:
+
+```bash
+luarocks install ljdns
+```
+
+From sources:
+
+
 ```bash
 make check
 make install
@@ -13,7 +22,12 @@ make install
 ### Requirements
 
 - [LuaJIT 2.x][libknot] - PUC-RIO Lua doesn't have the FFI module.
-- [libknot 2.3+][libknot] - isn't bundled, and must be [installed separately][knot-readme].
+- [libknot 2.4 - 2.5][libknot] - isn't bundled, and must be [installed separately][knot-readme].
+- ljsyscall >= 0.12
+- lua-cjson >= 2.1.0
+- lmdb (if you want to use it)
+- busted (for tests)
+- luacheck (for tests)
 
 
 ## Tools
