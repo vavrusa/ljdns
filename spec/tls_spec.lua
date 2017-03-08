@@ -13,10 +13,7 @@ describe('tls', function()
 		assert.truthy(nb(function ()
 			local client = assert(server:accept())
 			-- Upgrade to TLS
-			client = assert(tls.server(client, tls.creds.x509 {
-				certfile = 'test.crt',
-				keyfile = 'test.key',
-			}))
+			client = assert(tls.server(client))
 			local ret, err = client:receive(4)
 			assert.same('PING', ret)
 			reads = reads + 1
@@ -28,7 +25,7 @@ describe('tls', function()
 			local host, port = server:getsockname()
 			client:connect(host, port)
 			-- Upgrade to TLS
-			client = assert(tls.client(client, 'x509'))
+			client = assert(tls.client(client))
 			assert(client:send('PING'))
 			local ret = client:receive(4)
 			assert.same('PONG', ret)

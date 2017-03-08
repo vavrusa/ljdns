@@ -25,6 +25,7 @@ make install
 - [libknot 2.4 - 2.5][libknot] - isn't bundled, and must be [installed separately][knot-readme].
 - ljsyscall >= 0.12
 - lua-cjson >= 2.1.0
+- gnutls >= 3.4.6 (if you want DNS/TLS)
 - lmdb (if you want to use it)
 - busted (for tests)
 - luacheck (for tests)

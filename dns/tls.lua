@@ -1,8 +1,12 @@
 local ffi = require('ffi')
 local nb = require('dns.nbio')
-local gnutls = ffi.load('gnutls')
 local S = require('syscall')
 local c = S.c
+local utils = require('dns.utils')
+local gnutls = utils.clib('gnutls', {30,29,28,27})
+if not gnutls then
+    gnutls = ffi.load('gnutls')
+end
 
 -- GnuTLS init flags
 local flags = {
@@ -17,6 +21,7 @@ local flags = {
 
 -- GnuTLS defaults
 local default = {
+    HANDSHAKE_TIMEOUT_CLIENT = 500,
     HANDSHAKE_TIMEOUT = -1,
     NAME_DNS = 1,
 }
@@ -82,12 +87,15 @@ local err = {
     AGAIN =  -28,
     EXPIRED =  -29,
     DB_ERROR =  -30,
+    TIMEDOUT = -319,
 }
 
 ffi.cdef [[
+typedef void(*gnutls_log_func)(int level, const char *);
 typedef void* gnutls_session_t;
 typedef void* gnutls_certificate_credentials_t;
 typedef void* gnutls_anon_client_credentials_t;
+typedef void* gnutls_anon_server_credentials_t;
 typedef int gnutls_x509_crt_fmt_t;
 typedef int gnutls_server_name_type_t;
 typedef int gnutls_close_request_t;
@@ -107,6 +115,9 @@ void gnutls_certificate_free_credentials(gnutls_certificate_credentials_t sc);
 int gnutls_certificate_allocate_credentials(gnutls_certificate_credentials_t* res);
 void gnutls_anon_free_client_credentials(gnutls_anon_client_credentials_t sc);
 int gnutls_anon_allocate_client_credentials(gnutls_anon_client_credentials_t* sc);
+void gnutls_anon_free_server_credentials(gnutls_anon_server_credentials_t sc);
+int gnutls_anon_allocate_server_credentials(gnutls_anon_server_credentials_t* sc);
+int gnutls_anon_set_server_known_dh_params(gnutls_anon_server_credentials_t res, int sec_param);
 int gnutls_certificate_set_x509_trust_file(gnutls_certificate_credentials_t cred, const char *cafile, gnutls_x509_crt_fmt_t type);
 int gnutls_certificate_set_x509_key_file(gnutls_certificate_credentials_t res, const char *certfile, const char *keyfile, gnutls_x509_crt_fmt_t type);
 int gnutls_init(gnutls_session_t * session, unsigned int flags);
@@ -127,11 +138,19 @@ const char *gnutls_strerror(int error);
 char *gnutls_session_get_desc(gnutls_session_t session);
 ssize_t gnutls_record_send(gnutls_session_t session, const void *data, size_t data_size);
 ssize_t gnutls_record_recv(gnutls_session_t session, void *data, size_t data_size);
+size_t gnutls_record_check_pending(gnutls_session_t session);
+int gnutls_record_get_direction(gnutls_session_t session);
 int gnutls_priority_set_direct(gnutls_session_t session, const char *priorities, const char **err_pos);
 void gnutls_certificate_server_set_request(gnutls_session_t session, gnutls_certificate_request_t req);
 int gnutls_certificate_set_x509_system_trust(gnutls_certificate_credentials_t cred);
 int gnutls_certificate_set_known_dh_params(gnutls_certificate_credentials_t res, int sec_param);
+void gnutls_global_set_log_level(int level);
+void gnutls_global_set_log_function(gnutls_log_func log_func);
 ]]
+
+local function toerrstr(ret)
+    return ffi.string(gnutls.gnutls_strerror(ret))
+end
 
 ffi.metatype('tls_session_t', {
     __gc = function (self)
@@ -144,7 +163,9 @@ ffi.metatype('tls_session_t', {
                 coroutine.yield(nb.writers, self.fd)
                 ret = gnutls.gnutls_record_send(self.session[0], msg, len or #msg)
             end
-            if ret < 0 then return nil, {errno=c.E.IO, strerr=gnutls.gnutls_strerror(ret)} end
+            if ret < 0 then
+                return nil, {errno=c.E.IO, strerr=toerrstr(ret)}
+            end
             return ret
         end,
         receive = function (self, buflen, buf)
@@ -163,7 +184,9 @@ ffi.metatype('tls_session_t', {
                 coroutine.yield(nb.readers, self.fd)
                 ret = gnutls.gnutls_record_recv(self.session[0], buf, buflen)
             end
-            if ret < 0 then return nil, {errno=c.E.IO, strerr=gnutls.gnutls_strerror(ret)} end
+            if ret < 0 then
+                return nil, {errno=c.E.IO, strerr=toerrstr(ret)}
+            end
             -- If we allocated buffer, return immutable copy
             if copy then
                 return ffi.string(buf, ret)
@@ -190,9 +213,16 @@ end
 local creds = {open = {}}
 
 -- Create anonymous credentials
-creds.anon = ffi.new('struct { gnutls_anon_client_credentials_t data[1]; }')
-gnutls.gnutls_anon_allocate_client_credentials(creds.anon.data)
-ffi.gc(creds.anon, function (p) gnutls.gnutls_anon_free_client_credentials(p.data[0]) end)
+creds.anon = ffi.gc(ffi.new([[ struct {
+    gnutls_anon_client_credentials_t client[1];
+    gnutls_anon_server_credentials_t server[1];
+}]]), function (p)
+    gnutls.gnutls_anon_free_client_credentials(p.client[0])
+    gnutls.gnutls_anon_free_server_credentials(p.server[0])
+end)
+gnutls.gnutls_anon_allocate_client_credentials(creds.anon.client)
+gnutls.gnutls_anon_allocate_server_credentials(creds.anon.server)
+gnutls.gnutls_anon_set_server_known_dh_params(creds.anon.server[0], sec_param.MEDIUM)
 
 -- Create X.509 system credentials (if available)
 function creds.x509(tbl)
@@ -206,20 +236,20 @@ function creds.x509(tbl)
     else
         ret = gnutls.gnutls_certificate_set_x509_system_trust(cred.data[0])
     end
-    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    if ret < 0 then return nil, toerrstr(ret) end
     -- Set client certificate (if provided)
     if tbl.keyfile and tbl.certfile then
         ret = gnutls.gnutls_certificate_set_x509_key_file(cred.data[0], tbl.certfile, tbl.keyfile, x509_crt_fmt.PEM)
-        if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+        if ret < 0 then return nil, toerrstr(ret) end
     end
     -- Set security parameters
-    ret = gnutls.gnutls_certificate_set_known_dh_params(cred.data[0], tbl.sec_param or sec_param.MEDIUM)
-    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    ret = gnutls.gnutls_certificate_set_known_dh_params(cred.data[0], sec_param.MEDIUM)
+    if ret < 0 then return nil, toerrstr(ret) end
     table.insert(creds.open, cred)
     return cred
 end
 
--- Open default X.509 creds from system default CA file, we're NOT doing peer verification
+-- Open default X.509 creds from system default CA file, NOT doing peer verification
 creds.client_x509 = creds.x509 {}
 
 -- Module interface
@@ -233,62 +263,67 @@ local function handshake(s)
     gnutls.gnutls_handshake_set_timeout(s.session[0], default.HANDSHAKE_TIMEOUT)
     local ret = gnutls.gnutls_handshake(s.session[0])
     while ret < 0 and gnutls.gnutls_error_is_fatal(ret) == 0 do
-        if ret == err.AGAIN then coroutine.yield(nil, s.fd) end
+        if ret == err.AGAIN then
+            -- Check whether we're waiting for reading or writing
+            local read = gnutls.gnutls_record_get_direction(s.session[0])
+            coroutine.yield(read == 0 and nb.readers or nb.writers, s.fd)
+        end
         ret = gnutls.gnutls_handshake(s.session[0])
     end
     if ret < 0 then
-        return nil, ffi.string(gnutls.gnutls_strerror(ret))
+        return nil, toerrstr(ret)
     end
-    return true
+    return s
 end
 
 -- Create TLS session
 -- https://www.gnutls.org/manual/html_node/Simple-client-example-with-X_002e509-certificate-support.html#Simple-client-example-with-X_002e509-certificate-support
 local function session(sock, flag, cred)
-    local ret
     local s = ffi.new('tls_session_t', {nil}, sock.fd)
-    -- Initialize TLS session
     gnutls.gnutls_init(s.session, flag + flags.NONBLOCK)
-    if flag == flags.CLIENT then
-        ret = gnutls.gnutls_set_default_priority(s.session[0])
-        if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
-    else
-        ret = gnutls.gnutls_priority_set_direct(s.session[0], 'PERFORMANCE:%SERVER_PRECEDENCE', nil)
-        if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
-    end
     -- Set X.509 credentials (if provided)
+    local ret
     if cred then
-        ret = gnutls.gnutls_credentials_set(s.session[0], crd.CERTIFICATE, cred.data[0])
+        ret = gnutls.gnutls_set_default_priority(s.session[0])
+        if ret == 0 then
+            ret = gnutls.gnutls_credentials_set(s.session[0], crd.CERTIFICATE, cred.data[0])
+        end
     else
-        ret = gnutls.gnutls_credentials_set(s.session[0], crd.ANON, creds.anon.data[0])
+        -- Allow anonymous authentication if no certificate is passed
+        ret = gnutls.gnutls_priority_set_direct(s.session[0], 'PERFORMANCE:+ANON-ECDH:+ANON-DH', nil)
+        if ret == 0 then
+            local anon = flags.CLIENT and creds.anon.client or creds.anon.server
+            ret = gnutls.gnutls_credentials_set(s.session[0], crd.ANON, anon[0])
+        end
     end
-    if ret < 0 then return nil, ffi.string(gnutls.gnutls_strerror(ret)) end
+    if ret < 0 then return nil, toerrstr(ret) end
     return s
 end
 
 -- Create TLS client from connected socket
 function M.client(sock, cred)
     if cred == 'x509' then cred = creds.client_x509 end
-    local ok, err = session(sock, flags.CLIENT, cred)
-    if not ok then return nil, err end
-    local session = ok
-    ok, err = handshake(session)
-    if not ok then return nil, err end
-    return session
+    local s, err = session(sock, flags.CLIENT, cred)
+    if not s then return nil, err end
+    return handshake(s)
 end
 
 -- Create TLS server from connected socket
 function M.server(sock, cred, key)
     -- Create session
-    local ok, err = session(sock, flags.SERVER, cred)
-    if not ok then return nil, err end
-    local session = ok
+    local s, err = session(sock, flags.SERVER, cred)
+    if not s then return nil, err end
     -- Don't request certificate from a client
-    gnutls.gnutls_certificate_server_set_request(session.session[0], x509_crt_req.IGNORE)
+    gnutls.gnutls_certificate_server_set_request(s.session[0], x509_crt_req.IGNORE)
     -- Perform handshake and return
-    ok, err = handshake(session)
-    if not ok then return nil, err end
-    return session
+    return handshake(s)
+end
+
+-- Debugging facilities
+function M.debug(level, cb)
+    assert(type(level) == 'number', 'log level must be numeric')
+    gnutls.gnutls_global_set_log_level(level)
+    gnutls.gnutls_global_set_log_function(cb)
 end
 
 return M
