@@ -214,8 +214,9 @@ ffi.metatype(M.socket_t, {
 		end,
 		accept = function(self)
 			coroutine.yield(M.readers, self.fd)
-			local fd, err = S.accept(self.fd, 'nonblock')
+			local fd, err = S.accept(self.fd)
 			if not fd then return nil, err end
+			fd:nonblock()
 			return M.socket_t(fd:nogc():getfd())
 		end,
 		bind = function (self, host, port, qlen)
@@ -278,12 +279,16 @@ else
 	end
 end
 
+local function nilf()
+	return nil
+end
+
 -- Create platform-specific poller
 -- (Taken from ljsyscall examples)
-local function nilf() return nil end
 local poll
 if S.epoll_create then
 	poll = {
+		state = {},
 		init = function(p, maxevents)
 			p.events = t.epoll_events(maxevents)
 			return setmetatable({fd = assert(S.epoll_create())}, {__index = p})
@@ -291,19 +296,42 @@ if S.epoll_create then
 		event = t.epoll_event(),
 		add = function(p, s, write)
 			local ev = p.event
-			ev.events = write and c.EPOLL.OUT or c.EPOLL.IN
 			ev.data.fd = s
-			local ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.ADD, s, ev)
-			if err and err.errno == c.E.EXIST then
-				ok, err = true, nil -- Ok, if socket is already in the set
+			-- epoll interface operates on fd, it is not possible to add and remove
+			-- separate events, so we need to track what events are currently active on fd
+			local ok, err
+			local state = p.state[s]
+			if state then
+				ev.events = bit.bor(state, write and c.EPOLL.OUT or c.EPOLL.IN)
+				ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.MOD, s, ev)
+			else
+				ev.events = write and c.EPOLL.OUT or c.EPOLL.IN
+				ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.ADD, s, ev)
+			end
+			if ok then
+				p.state[s] = ev.events
 			end
 			return ok, err
 		end,
 		del = function(p, s, write)
 			local ev = p.event
-			ev.events = write and c.EPOLL.OUT or c.EPOLL.IN
 			ev.data.fd = s
-			return p.fd:epoll_ctl(c.EPOLL_CTL.DEL, s, ev)
+			-- check currently active events and remove fd from the epollfd only if
+			-- there are no more events left after changing the state
+			local ok, err
+			ev.events = bit.band(p.state[s] or 0, bit.bnot(write and c.EPOLL.OUT or c.EPOLL.IN))
+			if ev.events == 0 then
+				ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.DEL, s, ev)
+				if ok then
+					p.state[s] = nil
+				end
+			else
+				ok, err = p.fd:epoll_ctl(c.EPOLL_CTL.MOD, s, ev)
+				if ok then
+					p.state[s] = ev.events
+				end
+			end
+			return ok, err
 		end,
 		get = function(p)
 			local f, a, r = p.fd:epoll_wait(p.events)
@@ -364,7 +392,7 @@ else
 end
 
 -- Coroutines implementation
-local pollfd = assert(poll:init(512))
+local pollfd = assert(poll:init(4096))
 M.backend = 'syscall'
 M.pollfd = pollfd
 M.coroutines = 0
