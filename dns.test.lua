@@ -160,7 +160,7 @@ collectgarbage()
 -- Test LMDB interface
 local S = require('syscall')
 local lmdb = require('dns.lmdb')
-local tmpdir = string.format('.tmpdb%d', os.time())
+local tmpdir = string.format('/tmp/.tmpdb%d', os.time())
 if S.stat(tmpdir) then
 	S.util.rm(tmpdir)
 end

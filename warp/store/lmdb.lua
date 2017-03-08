@@ -233,7 +233,10 @@ function M.open(conf)
 	conf.size = conf.size or 10 * 1024 * 1024 * 1024
 	conf.flags = conf.flags or 'writemap, mapasync'
 	-- Open LMDB environment and a single DB
-	local env = assert(lmdb.open(conf.path, conf.flags, conf.size, conf.mode, conf.maxdbs))
+	local env, err = lmdb.open(conf.path, conf.flags, conf.size, conf.mode, conf.maxdbs)
+	if not env then
+		error(string.format('cannot open lmdb in %s: %s', conf.path, err))
+	end
 	local txn, db = assert(env:open())
 	assert(txn:commit())
 	return setmetatable({env=env,db=db}, {__index = meta})

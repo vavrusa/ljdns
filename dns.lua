@@ -32,6 +32,7 @@ typedef struct knot_rrset {
 	uint32_t __pad__;        /* Padding because libknot uses nested structure */
 	uint16_t rdcount;
 	knot_rdata_t *raw_data;
+	void *additional;
 } knot_rrset_t;
 typedef struct {
 	struct knot_pkt *pkt;

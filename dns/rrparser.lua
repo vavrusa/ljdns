@@ -4,6 +4,7 @@
 local ffi = require('ffi')
 local utils = require('dns.utils')
 local libzscanner = utils.clib('libzscanner', {1})
+assert(libzscanner, 'missing libzscanner1 library')
 
 ffi.cdef[[
 void free(void *ptr);

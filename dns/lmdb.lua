@@ -1,7 +1,11 @@
 local ffi = require('ffi')
 local bit = require('bit')
+local utils = require('dns.utils')
 local multiflags = require('syscall.helpers').multiflags
-local lmdb = ffi.load('lmdb')
+local lmdb = utils.clib('lmdb', {0})
+if not lmdb then
+	lmdb = ffi.load('lmdb')
+end
 
 ffi.cdef [[
 /*
@@ -189,7 +193,7 @@ local mdb_cursor_op = {
 local M = {op = mdb_cursor_op}
 
 -- Helpers
-local function mdb_error(ret)
+local function toerror(ret)
     return nil, ffi.string(lmdb.mdb_strerror(ret))
 end
 
@@ -232,7 +236,7 @@ ffi.metatype(mdb_cursor_t, {
             if ret == lmdb.MDB_NOTFOUND then
                 return nil
             elseif ret ~= 0 then
-                return mdb_error(ret)
+                return toerror(ret)
             end
             return k, v
         end,
@@ -246,7 +250,7 @@ ffi.metatype(mdb_cursor_t, {
             if ret == lmdb.MDB_NOTFOUND then
                 return nil
             elseif ret ~= 0 then
-                return mdb_error(ret)
+                return toerror(ret)
             end
             return k, v
         end,
@@ -272,7 +276,7 @@ ffi.metatype(mdb_txn_t, {
             assert(t.valid, 'operation on aborted transaction')
             local ret = lmdb.mdb_txn_commit(t.txn)
             t.valid = false
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return true
         end,
         reset = function (t)
@@ -284,7 +288,7 @@ ffi.metatype(mdb_txn_t, {
             assert(not t.valid, 'cannot renew valid transaction')
             local ret = lmdb.mdb_txn_renew(t.txn)
             t.valid = true
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return true
         end,
         put = function (t, key, val, flags)
@@ -295,7 +299,7 @@ ffi.metatype(mdb_txn_t, {
             if ret == lmdb.MDB_KEYEXIST then
                 return false
             elseif ret ~= 0 then
-                return mdb_error(ret)
+                return toerror(ret)
             end
             return true
         end,
@@ -307,7 +311,7 @@ ffi.metatype(mdb_txn_t, {
             if ret == lmdb.MDB_NOTFOUND then
                 return nil
             elseif ret ~= 0 then
-                return mdb_error(ret)
+                return toerror(ret)
             end
             return val, key
         end,
@@ -316,13 +320,13 @@ ffi.metatype(mdb_txn_t, {
             if type(key) == 'string' then key = mdb_val_t(#key, ffi.cast('void *', key)) end
             if not val then val =  mdb_val_t() end
             local ret = lmdb.mdb_del(t.txn, t.dbi, key, val)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return true
         end,
         cursor = function (t)
             local cursor = ffi.new('MDB_cursor *[1]')
             local ret = lmdb.mdb_cursor_open(t.txn, t.dbi, cursor)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return mdb_cursor_t(cursor[0], t.dbi)
         end
     },
@@ -338,13 +342,13 @@ ffi.metatype(mdb_env_t, {
         path = function (t)
             local path = ffi.new('const char* [1]')
             local ret = lmdb.mdb_env_get_path(t.env, path)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return ffi.string(path[0])
         end,
         copy = function (t, dst_path)
             if not dst_path then return nil end
             local ret = lmdb.mdb_env_copy(t.env, dst_path)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return ret
         end,
         txn = function (t, dbi, flags, parent)
@@ -352,7 +356,7 @@ ffi.metatype(mdb_env_t, {
             dbi = dbi or 0
             local txn = ffi.new('MDB_txn* [1]')
             local ret = lmdb.mdb_txn_begin(t.env, parent, flags, txn)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return mdb_txn_t(txn[0], dbi, true)
         end,
         open = function (t, name, flags, txn)
@@ -360,7 +364,7 @@ ffi.metatype(mdb_env_t, {
             txn = txn or t:txn(flags)
             local dbi = ffi.new('MDB_dbi [1]')
             local ret = lmdb.mdb_dbi_open(txn.txn, name, flags, dbi)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             txn.dbi = dbi[0]
             return txn, dbi[0]
         end,
@@ -373,7 +377,7 @@ ffi.metatype(mdb_env_t, {
         stat = function (t)
             local stat = ffi.new('MDB_stat [1]')
             local ret = lmdb.mdb_env_stat(t.env, stat)
-            if ret ~= 0 then return mdb_error(ret) end
+            if ret ~= 0 then return toerror(ret) end
             return stat[0]
         end
     }
@@ -393,17 +397,17 @@ function M.open(path, flags, size, mode, maxdbs)
     -- Create database environment
     local env = ffi.new('MDB_env *[1]')
     local ret = lmdb.mdb_env_create(env)
-    if ret ~= 0 then return mdb_error(ret) end
+    if ret ~= 0 then return toerror(ret) end
     env = mdb_env_t(env[0])
     if maxdbs then
         ret = lmdb.mdb_env_set_maxdbs(env.env, maxdbs)
-        if ret ~= 0 then return mdb_error(ret) end
+        if ret ~= 0 then return toerror(ret) end
     end
     ret = lmdb.mdb_env_set_mapsize(env.env, size)
-    if ret ~= 0 then return mdb_error(ret) end
+    if ret ~= 0 then return toerror(ret) end
     -- Open the environment
     ret = lmdb.mdb_env_open(env.env, path, mdb_env_flags[flags or 0], tonumber(mode or 660, 8))
-    if ret ~= 0 then return mdb_error(ret) end
+    if ret ~= 0 then return toerror(ret) end
     return env
 end
 
