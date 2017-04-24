@@ -157,11 +157,11 @@ ffi.metatype(M.socket_t, {
 					-- Written less than first buffer, shorten it
 					if nb < iov[0].iov_len then
 						iov[0].iov_len = iov[0].iov_len - nb
-						iov[0].iov_base = iov[0].iov_base + nb
+						iov[0].iov_base = ffi.cast('unsigned char *', iov[0].iov_base) + nb
 					-- Written less than both buffers, clear first and shorten second
-					else 
+					else
 						local off = (nb - iov[0].iov_len)
-						iov[1].iov_base = iov[1].iov_base + off
+						iov[1].iov_base = ffi.cast('unsigned char *', iov[1].iov_base) + off
 						iov[1].iov_len = iov[1].iov_len - off
 						iov[0].iov_len = 0
 					end
