@@ -7,8 +7,6 @@ local ffi = require('ffi')
 
 -- Support OpenResty modules
 _G.require = require('warp.vendor.resty').require
--- Enable trace stitching
-require('jit.opt').start('minstitch=5')
 -- Throttle readers when outstanding requests start piling up
 local concurrency_backpressure = 256
 
