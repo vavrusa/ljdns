@@ -1,8 +1,11 @@
 #!/usr/bin/env luajit
 local dns = require('dns')
 local nb = require('dns.nbio')
+local ffi = require('ffi')
+local bit = require('bit')
+
 -- Parse parameters
-local host, port, tcp, tls, xfer, key, cookie = nil, 53, false, false, false, nil
+local host, port, tcp, tls, xfer, key, cookie, https = nil, 53, false, false, false, nil, nil
 local version, dobit, bufsize, short, multi = 0, false, nil, false
 local qname, qtype, qclass = '.', dns.type.NS, dns.class.IN
 local flags = {'rd'}
@@ -52,6 +55,8 @@ local k = 1 while k <= #arg do
 		if port == 53 then port = 853 end
 	elseif v:find('+cookie',1) then
 		cookie = v:match('+cookie=(%S+)') or true
+	elseif v:find('+https',1) then
+		https = v:match('+https=(%S+)') or true
 	elseif v == '+cd' then table.insert(flags, 'cd')
 	elseif v == '+do' or v == '+dnssec' then dobit = true
 	elseif v == '-h' or v == '--help' then
@@ -63,6 +68,7 @@ local k = 1 while k <= #arg do
 		print('\t-f json   return DNS response as JSON')
 		print('\t+tcp      use TCP for transport')
 		print('\t+tls      use TLS for transport')
+		print('\t+https=X  use HTTPS for transport')
 		print('\t+short    print only answer records')
 		print('\t+cd       DNSSEC checking disabled')
 		print('\t+do       request DNSSEC records')
@@ -90,6 +96,7 @@ if host == nil then for line in io.lines('/etc/resolv.conf') do
 	if host ~= nil then break end
 end end
 local queries, planned = {}, {}
+
 -- Create a queries
 if not multi then
 	table.insert(planned, {qname, qtype, qclass})
@@ -142,22 +149,79 @@ local send, recv = nb.udpsend, nb.udprecv
 if tcp then
 	send, recv = nb.tcpsend, nb.tcprecv
 end
+
+-- DNS over HTTPS wrapper
+if https then
+	local http_client = require('http.client')
+	local new_headers = require('http.headers').new
+	local http_tls = require('http.tls')
+	local openssl_ctx = require('openssl.ssl.context')
+	local streams = {}
+
+	-- Switch nbio to cqueues as lua-http is using it
+	local cq = require('cqueues').new()
+	nb.go = function (f) return cq:wrap(f) or true end
+	nb.run = function (t) return cq:loop(t) end
+
+	-- Switch read/write functions to lua-http wrapper
+	nb.socket = function ()
+		-- Allow self-signed certificates
+		local ctx = http_tls.new_client_context()
+		ctx:setVerify(openssl_ctx.VERIFY_NONE)
+		return http_client.connect {
+			host = host,
+			port = port,
+			tls = true,
+			sendname = https,
+			version = 2,
+			ctx = ctx,
+		}
+	end
+
+	send = function (c, msg)
+		local s = c:new_stream()
+		local req_headers = new_headers()
+		req_headers:append(":scheme", "https")
+		req_headers:append(":authority", https)
+		req_headers:upsert(":method", "POST")
+		req_headers:append(":path", "/")
+		req_headers:upsert("content-type", "application/dns-udpwireformat")
+		s:write_headers(req_headers, false)
+		s:write_chunk(msg:towire(), true)
+		table.insert(streams, s)
+	end
+
+	recv = function (c, msg)
+		local stream = table.remove(streams)
+		local rcvd = 0
+		for chunk in stream:each_chunk() do
+			ffi.copy(msg.wire + rcvd, chunk)
+			rcvd = rcvd + #chunk
+		end
+
+		return rcvd
+	end
+
+
+end
+
 assert(nb.go(function()
 	-- Make connection to destination
 	local sock = nb.socket(nb.family(host), tcp and 'stream')
 	if tcp and not tls then -- Attempt TFO
 		-- We need to serialise message in a buffer prefixed with message length
 		-- Convenience functions are unavailable and we can't use writev()
-		local ffi, bit = require('ffi'), require('bit')
 		local buf = ffi.new('uint8_t [?]', queries[1].size + 2)
 		local txlen = ffi.cast('uint16_t *', buf)
 		txlen[0] = dns.utils.n16(tonumber(queries[1].size))
 		ffi.copy(buf + 2, queries[1].wire, queries[1].size)
 		assert(sock:connect(host, port, buf, ffi.sizeof(buf)))
 	else -- Make connected socket and send query
-		assert(sock:connect(host, port))
-		if tls then -- Upgrade to TLS
-			sock = assert(require('dns.tls').client(sock, 'x509'))
+		if not https then
+			assert(sock:connect(host, port))
+			if tls then -- Upgrade to TLS
+				sock = assert(require('dns.tls').client(sock, 'x509'))
+			end
 		end
 		send(sock, queries[1])
 	end
