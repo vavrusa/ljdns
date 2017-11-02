@@ -15,8 +15,7 @@ description = {
    license = "BSD"
 }
 dependencies = {
-   "lua >= 5.1",
-   "lua-cjson >= 2.1.0",
+   "lua >= 5.1"
 }
 external_dependencies = {
     LIBZSCANNER = {
