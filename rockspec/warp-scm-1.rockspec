@@ -1,7 +1,8 @@
 package = "warp"
-version = "0.1-2"
+version = "scm-1"
 source = {
-   url = "git://github.com/vavrusa/ljdns"
+   url = "git://github.com/vavrusa/ljdns",
+   branch = "master"
 }
 description = {
    summary = "A DNS router/middleware server that can run in OpenResty.",
@@ -13,7 +14,6 @@ description = {
    license = "BSD"
 }
 dependencies = {
-   "ljdns >= 2.4",
 }
 build = {
   type = "builtin",
