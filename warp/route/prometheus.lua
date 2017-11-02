@@ -29,11 +29,11 @@ local api = {
 			count = count + c
 			sum = sum + c * i
 			if i == last then i = '+Inf' end
-			table.insert(body, string.format('latency_bucket{le=%s} %f', i, c))
+			table.insert(body, string.format('latency_bucket{le="%s"} %f', i, c))
 		end
 		table.insert(body, string.format('latency_count %f', count))
 		table.insert(body, string.format('latency_sum %f', sum))
-		writer(req, table.concat(body,'\n'), '200 OK', 'text/plain; version=0.0.4')
+		writer(req, table.concat(body,'\n') .. '\n', '200 OK', 'text/plain; version=0.0.4')
 	end
 }
 
