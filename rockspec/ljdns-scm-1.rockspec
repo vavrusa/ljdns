@@ -16,7 +16,6 @@ description = {
 }
 dependencies = {
    "lua >= 5.1",
-   "ljsyscall >= 0.12",
    "lua-cjson >= 2.1.0",
 }
 external_dependencies = {
