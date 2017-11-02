@@ -185,7 +185,9 @@ if https then
 		req_headers:append(":authority", https)
 		req_headers:upsert(":method", "POST")
 		req_headers:append(":path", "/")
+		-- https://tools.ietf.org/html/draft-hoffman-dns-over-https-01
 		req_headers:upsert("content-type", "application/dns-udpwireformat")
+		msg:id(0) -- Sec. 5, should use a DNS ID of 0
 		s:write_headers(req_headers, false)
 		s:write_chunk(msg:towire(), true)
 		table.insert(streams, s)
