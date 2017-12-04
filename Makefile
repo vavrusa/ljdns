@@ -16,7 +16,7 @@ CLIB := kdns_clib.$(LIBEXT)
 all: check
 check: $(addsuffix .test,$(OBJS))
 	@echo "[*] static analysis"
-	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua warp/vendor warp/config.lua
+	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua
 	@echo "[*] unit tests"
 	@busted --lua=$(LUA) -o TAP
 clean:
