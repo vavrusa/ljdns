@@ -57,7 +57,7 @@ local function zone_transfer(sock, parser)
 	else
 		answer:aa(true)
 		assert(parser:open(zonefile))
-		local found, soa, nrrs, npkts = false, nil, 0, 0
+		local soa, nrrs, npkts = nil, 0, 0
 		local rrset = ffi.gc(dns.rrset(nil, 0), dns.rrset.clear)
 		rrset.raw_owner = dns.todname(parser.r_owner)
 		-- Stream zone to requestor
@@ -82,7 +82,7 @@ end
 local function serve(sock)
 	local parser = assert(rrparser.new())
 	local ok, err = pcall(zone_transfer, sock, parser)
-	if err then panic(err) end
+	if not ok then panic(err) end
 	parser:reset()
 	sock:close()
 end
@@ -99,8 +99,8 @@ for k,v in next,arg,0 do
 			while true do
 				local ok, err = nb.go(serve, tcp:accept())
 				if not ok then
-					local host, port = tcp:getsockname()
-					log('error', '%s#%d: %s', host, port, err)
+					local chost, cport = tcp:getsockname()
+					log('error', '%s#%d: %s', chost, cport, err)
 				end
 			end
 		end)
@@ -111,4 +111,4 @@ for k,v in next,arg,0 do
 end
 
 local ok, err = nb.run()
-if err then panic(err) end
+if not ok then panic(err) end

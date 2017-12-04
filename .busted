@@ -5,7 +5,7 @@ return {
 		coverage = true
 	},
 	default = {
-		lpath = "./?.lua",
+		lpath = "./?.lua;./?/init.lua",
 		helper = "spec/helper.lua",
 		["auto-insulate"] = false,
 	}

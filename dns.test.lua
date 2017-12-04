@@ -1,3 +1,5 @@
+package.path = './?/init.lua;' .. package.path
+
 local dns = require('dns')
 local ffi = require('ffi')
 

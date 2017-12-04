@@ -62,7 +62,7 @@ function M.tcpsend(sock, msg)
 end
 
 -- DNS/TCP recv
-function M.tcprecv(sock, msg, pipeline, await_id, leader)
+function M.tcprecv(sock, msg, _, _, _)
 	-- Receive message length
 	local h = ffi.new('uint16_t [1]')
 	local ret, err = sock:receive(2, h)
@@ -108,5 +108,5 @@ end
 
 -- Call metamethod implements coroutine start
 return setmetatable(M, {
-	__call = function(c, closure, ...) return M.go(closure, ...) end,
+	__call = function(_, closure, ...) return M.go(closure, ...) end,
 })

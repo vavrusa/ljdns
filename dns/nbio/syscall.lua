@@ -50,7 +50,6 @@ local function toaddr(host, port)
 end
 
 return function (M)
-local txn = 0
 -- Compatibility with OpenResty socket APIs
 -- See https://github.com/openresty/lua-nginx-module#ngxsocketudp
 --     https://github.com/openresty/lua-nginx-module#ngxsockettcp
@@ -182,7 +181,7 @@ ffi.metatype(M.socket_t, {
 			if buf then
 				buflen = buflen or #buf
 				if c.MSG.FASTOPEN then
-					local ok, err = S.sendto(self.fd, buf, buflen, c.MSG.FASTOPEN, addr)
+					local ok, _ = S.sendto(self.fd, buf, buflen, c.MSG.FASTOPEN, addr)
 					if ok then return ok end
 				end
 			end
@@ -343,7 +342,7 @@ if S.epoll_create then
 		eof = function(ev) return ev.HUP or ev.ERR or ev.RDHUP end,
 		ein = function(ev) return bit.band(ev.events, c.EPOLL.IN) ~= 0 end,
 		eout = function(ev) return bit.band(ev.events, c.EPOLL.OUT) ~= 0 end,
-		timer = function(ev) return false end, -- NYI
+		timer = function() return false end, -- NYI
 	}
 elseif S.kqueue then
 	poll = {

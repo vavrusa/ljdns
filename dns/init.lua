@@ -7,139 +7,6 @@ local utils = require('dns.utils')
 local n16, n32 = utils.n16, utils.n32
 local knot = utils.knot
 
-ffi.cdef[[
-/*
- * Data structures
- */
-typedef struct {
-	bool	wrap;
-	bool	show_class;
-	bool	show_ttl;
-	bool	verbose;
-	bool	empty_ttl;
-	bool	human_ttl;
-	bool	human_tmstamp;
-	bool	generic;
-	void (*ascii_to_idn)(char **name);
-} knot_dump_style_t;
-typedef int knot_section_t; /* Do not touch */
-typedef void knot_rrinfo_t; /* Do not touch */
-typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
-typedef struct knot_rrset {
-	knot_dname_t *raw_owner; /* This is private because GC-unaware */
-	uint16_t raw_type;
-	uint16_t raw_class;
-	uint32_t __pad__;        /* Padding because libknot uses nested structure */
-	uint16_t rdcount;
-	knot_rdata_t *raw_data;
-	void *additional;
-} knot_rrset_t;
-typedef struct {
-	struct knot_pkt *pkt;
-	uint16_t pos;
-	uint16_t count;
-} knot_pktsection_t;
-typedef struct {
-	uint8_t *wire;
-	size_t size;
-	size_t max_size;
-	size_t parsed;
-	uint16_t reserved;
-	uint16_t qname_size;
-	uint16_t rrset_count;
-	uint16_t flags;
-	knot_rrset_t *opt;
-	knot_rrset_t *tsig;
-	struct {
-		uint8_t *pos;
-		size_t len;
-	} _tsig_wire;
-	knot_section_t cur_section;
-	knot_pktsection_t _sections[3];
-	size_t _rrset_allocd;
-	knot_rrinfo_t *_rr_info;
-	knot_rrset_t *_rr;
-	uint8_t _stub[]; /* Do not touch */
-} knot_pkt_t;
-typedef struct {
-	size_t size;
-	uint8_t *data;
-} dnssec_binary_t;
-typedef struct {
-	int algorithm;
-	knot_dname_t *name;
-	dnssec_binary_t secret;
-} knot_tsig_key_t;
-typedef struct {
-	knot_tsig_key_t key;
-	size_t digest_len;
-	uint64_t last_signed;
-	uint8_t digest[64]; /* Max size of the HMAC-SHA512 */
-} tsig_t;
-/* descriptors */
-const char *knot_strerror(int code);
-int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
-/* domain names */
-knot_dname_t *knot_dname_from_str(uint8_t *dst, const char *name, size_t maxlen);
-char *knot_dname_to_str(char *dst, const uint8_t *name, size_t maxlen);
-int knot_dname_to_lower(uint8_t *name);
-int knot_dname_labels(const uint8_t *name, const uint8_t *pkt);
-bool knot_dname_in(const uint8_t *domain, const uint8_t *sub);
-knot_dname_t *knot_dname_copy(const void *name, void /* mm_ctx_t */ *mm);
-int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uint8_t *pkt);
-/* resource records */
-extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
-uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
-void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
-int knot_rrset_txt_dump(const knot_rrset_t *rrset, char **dst, size_t *maxlen, const knot_dump_style_t *style);
-int knot_rrset_txt_dump_data(const knot_rrset_t *rrset, size_t pos, char *dst, size_t maxlen, const knot_dump_style_t *style);
-int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);
-/* opt rr */
-uint8_t knot_edns_get_version(const knot_rrset_t *opt_rr);
-void knot_edns_set_version(knot_rrset_t *opt_rr, uint8_t version);
-int knot_edns_add_option(knot_rrset_t *opt_rr, uint16_t code, uint16_t length, const uint8_t *data, void *mm);
-bool knot_edns_has_option(const knot_rrset_t *opt_rr, uint16_t code);
-uint8_t *knot_edns_get_option(const knot_rrset_t *opt_rr, uint16_t code);
-uint16_t knot_edns_opt_get_length(const uint8_t *opt);
-size_t knot_edns_wire_size(knot_rrset_t *opt_rr);
-void knot_edns_set_ext_rcode(knot_rrset_t *opt_rr, uint8_t ext_rcode);
-uint8_t knot_edns_get_ext_rcode(const knot_rrset_t *opt_rr);
-/* packet */
-knot_dname_t *knot_pkt_qname(const knot_pkt_t *pkt);
-uint16_t knot_pkt_qtype(const knot_pkt_t *pkt);
-uint16_t knot_pkt_qclass(const knot_pkt_t *pkt);
-int knot_pkt_begin(knot_pkt_t *pkt, int section_id);
-const knot_rrset_t *knot_pkt_rr(const knot_pktsection_t *section, uint16_t i);
-const knot_pktsection_t *knot_pkt_section(const knot_pkt_t *pkt, knot_section_t section_id);
-knot_pkt_t *knot_pkt_new(void *wire, uint16_t len, /* mm_ctx_t */ void *mm);
-int knot_pkt_put(knot_pkt_t *pkt, uint16_t compr_hint, const knot_rrset_t *rr, uint16_t flags);
-int knot_pkt_put_question(knot_pkt_t *pkt, const knot_dname_t *qname,
-                          uint16_t qclass, uint16_t qtype);
-int knot_pkt_parse(knot_pkt_t *pkt, unsigned flags);
-int knot_pkt_parse_section(knot_pkt_t *pkt, unsigned flags);
-int knot_pkt_parse_question(knot_pkt_t *pkt);
-void knot_pkt_clear(knot_pkt_t *pkt);
-void knot_pkt_free(knot_pkt_t **pkt);
-/* tsig */
-int knot_tsig_key_init_str(knot_tsig_key_t *key, const char *params);
-int knot_tsig_key_init_file(knot_tsig_key_t *key, const char *filename);
-int knot_tsig_key_copy(knot_tsig_key_t *dst, const knot_tsig_key_t *src);
-void knot_tsig_key_deinit(knot_tsig_key_t *key);
-int knot_tsig_sign(uint8_t *msg, size_t *msg_len, size_t msg_max_len,
-                   const uint8_t *request_mac, size_t request_mac_len,
-                   uint8_t *digest, size_t *digest_len,
-                   const knot_tsig_key_t *key, uint16_t tsig_rcode,
-                   uint64_t request_time_signed);
-int knot_tsig_client_check(const knot_rrset_t *tsig_rr,
-                           const uint8_t *wire, size_t size,
-                           const uint8_t *request_mac, size_t request_mac_len,
-                           const knot_tsig_key_t *key,
-                           uint64_t prev_time_signed);
-const uint8_t *knot_tsig_rdata_mac(const knot_rrset_t *tsig);
-size_t knot_tsig_rdata_mac_length(const knot_rrset_t *tsig);
-uint64_t knot_tsig_rdata_time_signed(const knot_rrset_t *tsig);
-]]
-
 -- Basic types
 local void_p = ffi.typeof('void *')
 local u8_p = ffi.typeof('uint8_t *')
@@ -478,7 +345,7 @@ ffi.metatype( knot_rrset_t, {
 		if rr.raw_owner ~= nil then ffi.C.free(rr.raw_owner) end
 		if rr.rdcount > 0 then ffi.C.free(rr.raw_data) end
 	end,
-	__new = function (ct, owner, rrtype, rrclass, ttl)
+	__new = function (ct, owner, rrtype, rrclass, _)
 		local rr = ffi.new(ct)
 		rr.raw_owner = owner and knot.knot_dname_copy(owner, nil)
 		rr.raw_type = rrtype or 0
@@ -513,8 +380,8 @@ ffi.metatype( knot_rrset_t, {
 		end,
 		rdata = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
-			local rdata = utils.rdsetget(rr, i)
-			return ffi.string(knot.knot_rdata_data(rdata), knot.knot_rdata_rdlen(rdata))
+			local data = utils.rdsetget(rr, i)
+			return ffi.string(knot.knot_rdata_data(data), knot.knot_rdata_rdlen(data))
 		end,
 		count = function (rr)
 			return tonumber(rr.rdcount)
@@ -547,11 +414,11 @@ ffi.metatype( knot_rrset_t, {
 			rr.raw_data = nil
 			return rr
 		end,
-		add = function(rr, rdata, ttl, rdlen)
+		add = function(rr, data, ttl, rdlen)
 			assert(ffi.istype(knot_rrset_t, rr))
 			ttl = ttl or rr:ttl()
-			rdlen = rdlen or #rdata
-			return (knot.knot_rrset_add_rdata(rr, rdata, rdlen, ttl, nil) == 0 and rr)
+			rdlen = rdlen or #data
+			return (knot.knot_rrset_add_rdata(rr, data, rdlen, ttl, nil) == 0 and rr)
 		end,
 		copy = function (rr, dst)
 			assert(ffi.istype(knot_rrset_t, rr))
@@ -572,9 +439,9 @@ ffi.metatype( knot_rrset_t, {
 		merge = function (rr, next)
 			assert(ffi.istype(knot_rrset_t, rr))
 			assert(ffi.istype(knot_rrset_t, next))
-			for _, rdata in ipairs(next) do
-				local rdlen = knot.knot_rdata_rdlen(rdata)
-				assert(rr:add(knot.knot_rdata_data(rdata), rr:ttl(), rdlen))
+			for _, data in ipairs(next) do
+				local rdlen = knot.knot_rdata_rdlen(data)
+				assert(rr:add(knot.knot_rdata_data(data), rr:ttl(), rdlen))
 			end
 		end,
 		clear = function (rr)
@@ -615,7 +482,7 @@ local function edns_payload(rr, val)
 	if val ~= nil then rr.raw_class = val end
 	return rr:class()
 end
-local function edns_do(rr, val, raw)
+local function edns_do(rr, val)
 	if rr == nil then return false end
 	local ttl = rr:ttl()
 	if val ~= nil then
@@ -750,7 +617,6 @@ local function packet_tostring(pkt)
 	if pkt.tsig ~= nil then
 		data = data..string.format(';; TSIG PSEUDOSECTION:\n%s', pkt.tsig:tostring())
 	end
-	local qtype = pkt:qtype()
 	-- Zone transfer answers may omit question
 	if pkt:qdcount() > 0 then
 		data = data..string.format(';; QUESTION\n;%s\t%s\t%s\n',
@@ -797,7 +663,7 @@ local function pkt_free(pkt)
 	knot.knot_pkt_free(pkt_arr)
 end
 ffi.metatype( knot_pkt_t, {
-	__new = function (ctype, size, wire)
+	__new = function (_, size, wire)
 		if size < 12 or size >= 65536 then error('packet size must be <12, 65535>') end
 		local pkt = knot.knot_pkt_new(nil, size, nil)
 		if pkt == nil then return nil end
@@ -984,7 +850,7 @@ ffi.metatype( tsig_t, {
 	__gc = function (tsig)
 		knot.knot_tsig_key_deinit(tsig.key)
 	end,
-	__new = function (ct, text)
+	__new = function (_, text)
 		assert(text)
 		local tsig = ffi.new(tsig_t)
 		local ret = knot.knot_tsig_key_init_str(tsig.key, text)

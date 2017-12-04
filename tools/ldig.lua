@@ -2,7 +2,6 @@
 local dns = require('dns')
 local nb = require('dns.nbio')
 local ffi = require('ffi')
-local bit = require('bit')
 
 -- Parse parameters
 local host, port, tcp, tls, xfer, key, cookie, https = nil, 53, false, false, false, nil, nil
@@ -193,7 +192,7 @@ if https then
 		table.insert(streams, s)
 	end
 
-	recv = function (c, msg)
+	recv = function (_, msg)
 		local stream = table.remove(streams)
 		local rcvd = 0
 		for chunk in stream:each_chunk() do
@@ -249,11 +248,11 @@ assert(nb.go(function()
 		nbytes, npkts = nbytes + tonumber(rcvd), npkts + 1
 		-- Decide if we should wait for more packets
 		if xfer then
-			local answer = answer:section(dns.section.ANSWER)
-			if #answer > 0 then
-				local last = answer[#answer - 1]
-				if not soa and answer[0]:type() == dns.type.SOA then -- Starting SOA
-					soa = dns.rdata.soa_serial(answer[0]:rdata(0))
+			local rrs = answer:section(dns.section.ANSWER)
+			if #rrs > 0 then
+				local last = rrs[#rrs - 1]
+				if not soa and rrs[0]:type() == dns.type.SOA then -- Starting SOA
+					soa = dns.rdata.soa_serial(rrs[0]:rdata(0))
 				elseif last:type() == dns.type.SOA then -- Ending SOA
 					if soa == dns.rdata.soa_serial(last:rdata(0)) then
 						break

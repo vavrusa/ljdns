@@ -116,9 +116,9 @@ describe('dnssec', function()
 			assert.truthy(keys, 'didnt create another keystore: ' .. (err or ''))
 			local lib = os.getenv('SOFTHSM_LIB')
 			if lib then
-				local keys, err = kasp:keystore('softhsm', {
+				keys, err = kasp:keystore('softhsm', {
 					backend = 'pkcs11',
-					config = 'pkcs11:token=dnssec;pin-value=1234 ' .. lib, 
+					config = 'pkcs11:token=dnssec;pin-value=1234 ' .. lib,
 				})
 				assert.truthy(keys, 'didnt create PKCS11 keystore: ' .. (err or ''))
 			end
@@ -130,7 +130,7 @@ describe('dnssec', function()
 			assert.truthy(keyset, err)
 			local policy = kasp:policy('ecdsa')
 			-- Manually generate additional KSK
-			local ksk, key_id = keyset:generate(true)
+			local ksk, _ = keyset:generate(true)
 			assert.truthy(ksk, 'didnt generate keyset key')
 			assert.truthy(ksk:can_sign(), 'generated key that cannot sign')
 			-- Walk keyset
@@ -140,30 +140,39 @@ describe('dnssec', function()
 			-- Perform key rollover: initialise
 			local now = os.time()
 			local time, action = keyset:plan(now)
-			assert.same(now, time, 'initial signing not now')
-			assert.same(dnssec.action.ZSK_INIT, action, 'didnt schedule initial signing')
+			assert.same(now, time,
+				'initial signing not now')
+			assert.same(dnssec.action.ZSK_INIT, action,
+				'didnt schedule initial signing')
 			keyset:action(action, time)
 			-- Perform key rollover: publish keys
 			local time, action = keyset:plan(now)
-			assert.same(now + policy.zsk_lifetime, time, 'didnt schedule rollover start in the future')
-			assert.same(dnssec.action.ZSK_PUBLISH, action, 'didnt schedule rollover start')
+			assert.same(now + policy.zsk_lifetime, time,
+				'didnt schedule rollover start in the future')
+			assert.same(dnssec.action.ZSK_PUBLISH, action,
+				'didnt schedule rollover start')
 			now = time
 			keyset:action(action, time)
 			-- Perform key rollover: key published, start resigning
 			local time, action = keyset:plan(now)
-			assert.same(dnssec.action.ZSK_RESIGN, action, 'didnt schedule rollover resign')
-			assert.same(now + policy.propagation_delay + policy.dnskey_ttl, time, 'didnt schedule rollover resign in the future')
+			assert.same(dnssec.action.ZSK_RESIGN, action,
+				'didnt schedule rollover resign')
+			assert.same(now + policy.propagation_delay + policy.dnskey_ttl, time,
+				'didnt schedule rollover resign in the future')
 			now = time
 			keyset:action(action, time)
 			-- Perform key rollover: resigned, start retiring old key
 			local time, action = keyset:plan(now)
-			assert.same(dnssec.action.ZSK_RETIRE, action, 'didnt schedule retire of zsk')
-			assert.same(now + policy.propagation_delay + policy.zone_maximal_ttl, time, 'didnt schedule rollover reture in the future')
+			assert.same(dnssec.action.ZSK_RETIRE, action,
+				'didnt schedule retire of zsk')
+			assert.same(now + policy.propagation_delay + policy.zone_maximal_ttl, time,
+				'didnt schedule rollover reture in the future')
 			now = time
 			keyset:action(action, time)
 			-- Perform key rollover: rollover complete, start new
-			local time, action = keyset:plan(now)
-			assert.same(dnssec.action.ZSK_PUBLISH, action, 'didnt finish rollover')
+			local _, action = keyset:plan(now)
+			assert.same(dnssec.action.ZSK_PUBLISH, action,
+				'didnt finish rollover')
 		end)
 	end)
 end)

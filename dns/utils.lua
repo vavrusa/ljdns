@@ -3,7 +3,7 @@ local ffi = require('ffi')
 local bit = require('bit')
 
 -- Compatibility with older LJ that doesn't have table.clear()
-local ok = pcall(require, 'table.clear')
+pcall(require, 'table.clear')
 if not table.clear then
 	table.clear = function (t)  -- luacheck: ignore
 		for i, _ in ipairs(t) do
@@ -25,6 +25,10 @@ end
 
 -- Return versioned C library
 function utils.clib(soname, versions)
+	-- Search builtin library version first
+	if _G[soname .. '_SONAME'] then
+		return ffi.load(_G[soname .. '_SONAME']), 'builtin'
+	end
 	for _, v in pairs(versions) do
 		local ok, lib = pcall(ffi.load, utils.libname(soname, tostring(v)))
 		if ok then return lib, v end
@@ -39,7 +43,7 @@ function utils.hexdump(buf)
 		io.write(string.format('%08X  ',byte-1))
 		chunk:gsub('.', function (c) io.write(string.format('%02X ',string.byte(c))) end)
 		io.write(string.rep(' ',3*(16-#chunk)))
-		io.write(' ',chunk:gsub('%c','.'),"\n") 
+		io.write(' ',chunk:gsub('%c','.'),"\n")
 	end
 end
 
@@ -48,37 +52,34 @@ function utils.addrparse(s)
 	return s:match '([^#]+)', tonumber(s:match '#(%d+)$') or 53
 end
 
--- FFI + C code
+-- Use explicit library or search in the library load path
 local knot, knot_version = utils.clib('libknot', {5, 6, 7})
-local cutil = ffi.load(package.searchpath('kdns_clib', package.cpath))
-ffi.cdef[[
-/* libc */
-char *strdup(const char *s);
-void *calloc(size_t nmemb, size_t size);
-void free(void *ptr);
-int memcmp(const void *a, const void *b, size_t len);
-/* helper library */
-unsigned mtime(const char *path);
-int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
-int dnamekey(uint8_t *restrict dst, const uint8_t *restrict src);
-unsigned bucket(unsigned l);
-/* libknot */
-typedef struct { uint8_t bytes[?]; } knot_rdata_t;
-uint16_t knot_rdata_rdlen(void *rr);
-uint8_t *knot_rdata_data(void *rr);
-size_t knot_rdata_array_size(uint16_t size);
-int knot_dname_size(const uint8_t *name);
-/* murmurhash3 */
-void MurmurHash3_x86_32  ( const void * key, int len, uint32_t seed, void * out );
-void MurmurHash3_x64_128 ( const void * key, int len, uint32_t seed, void * out );
-]]
 
 -- Export library
 utils.knot = knot
 utils.knot_version = knot_version
 
--- Latency bucket
-utils.bucket = cutil.bucket
+-- Load cdefs for given library version
+require(_G['libknot_CDEFS'] or 'dns.cdef')
+
+-- FFI + C code
+local has_cutil, cutil = pcall(ffi.load, package.searchpath('kdns_clib', package.cpath))
+if has_cutil then
+	ffi.cdef[[
+	/* helper library */
+	unsigned mtime(const char *path);
+	int dnamecmp(const uint8_t *lhs, const uint8_t *rhs);
+	int dnamekey(uint8_t *restrict dst, const uint8_t *restrict src);
+	unsigned bucket(unsigned l);
+	/* murmurhash3 */
+	void MurmurHash3_x86_32  ( const void * key, int len, uint32_t seed, void * out );
+	void MurmurHash3_x64_128 ( const void * key, int len, uint32_t seed, void * out );
+	]]
+
+	-- Latency bucket
+	utils.bucket = cutil.bucket
+	utils.mtime = cutil.mtime
+end
 
 -- Byte order conversions
 local rshift,band = bit.rshift,bit.band
@@ -139,7 +140,10 @@ end
 
 -- Canonically compare domain wire name / keys
 local function dnamecmp(lhs, rhs)
-	return (cutil.dnamecmp(lhs.bytes, rhs.bytes))
+	if cutil then
+		return (cutil.dnamecmp(lhs.bytes, rhs.bytes))
+	end
+	return (knot.knot_dname_cmp(lhs.bytes, rhs.bytes))
 end
 
 -- Wire writer
@@ -165,7 +169,17 @@ local function write_u16(w, val) return wire_write(w, n16(val), 2, ffi.typeof('u
 local function write_u32(w, val) return wire_write(w, n32(val), 4, ffi.typeof('uint32_t *')) end
 local function write_bytes(w, val, len) return wire_write(w, val, len or #val, nil) end
 local function wire_writer(p, maxlen)
-	return {p=ffi.cast('char *', p), len=0, maxlen=maxlen, u8=write_u8, u16=write_u16, u32=write_u32, bytes=write_bytes, tell=wire_tell, seek=wire_seek}
+	return {
+		p = ffi.cast('char *', p),
+		len = 0,
+		maxlen = maxlen,
+		u8 = write_u8,
+		u16 = write_u16,
+		u32 = write_u32,
+		bytes = write_bytes,
+		tell = wire_tell,
+		seek = wire_seek
+	}
 end
 utils.wire_writer=wire_writer
 -- Wire reader
@@ -186,7 +200,17 @@ local function read_u16(w) return n16(wire_read(w, 2, ffi.typeof('uint16_t *')))
 local function read_u32(w) return n16(wire_read(w, 4, ffi.typeof('uint32_t *'))) end
 local function read_bytes(w, len) return wire_read(w, len) end
 local function wire_reader(p, maxlen)
-	return {p=ffi.cast('char *', p), len=0, maxlen=maxlen, u8=read_u8, u16=read_u16, u32=read_u32, bytes=read_bytes, tell=wire_tell, seek=wire_seek}
+	return {
+		p = ffi.cast('char *', p),
+		len = 0,
+		maxlen = maxlen,
+		u8 = read_u8,
+		u16 = read_u16,
+		u32 = read_u32,
+		bytes = read_bytes,
+		tell = wire_tell,
+		seek = wire_seek
+	}
 end
 utils.wire_reader=wire_reader
 
@@ -199,7 +223,6 @@ utils.rdsetget = rdsetget
 utils.rdataiter = rdataiter
 utils.dnamelen = dnamelen
 utils.dnamecmp = dnamecmp
-utils.mtime = cutil.mtime
 
 -- Inverse table
 function utils.itable(t, tolower)
@@ -296,7 +319,6 @@ local function bsearcher(array, len)
 	-- 		low = low + %d
 	-- 	end
 	-- 	]], m1, m1)
-		
 	-- end
 	-- code = code .. 'return array[low] end'
 	-- -- Compile and wrap in closure with current upvalues
@@ -360,8 +382,8 @@ utils.hash128 = function (data, len, dst)
 end
 
 -- Export basic OS operations
-local _, S = pcall(require, 'syscall')
-if S then
+local has_syscall, S = pcall(require, 'syscall')
+if has_syscall and type(S) == 'table' then
 	utils.chdir = S.chdir
 	utils.mkdir = S.mkdir
 	utils.isdir = function (path)

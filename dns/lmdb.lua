@@ -1,5 +1,4 @@
 local ffi = require('ffi')
-local bit = require('bit')
 local utils = require('dns.utils')
 local multiflags = require('syscall.helpers').multiflags
 local lmdb = utils.clib('lmdb', {0})
@@ -231,7 +230,7 @@ ffi.metatype(mdb_cursor_t, {
                 op = op or mdb_cursor_op.FIRST
             end
             -- Set cursor to next iteration
-            v = v or mdb_val_t()        
+            v = v or mdb_val_t()
             local ret = lmdb.mdb_cursor_get(t.c, k, v, op)
             if ret == lmdb.MDB_NOTFOUND then
                 return nil

@@ -43,7 +43,7 @@ build = {
     ["dns.lmdb"] = "dns/lmdb.lua",
     ["dns.tls"] = "dns/tls.lua",
     ["dns.dnssec"] = "dns/dnssec.lua",
-    dns = "dns.lua",
+    dns = "dns/init.lua",
     kdns_clib = { "src/utils.c", "src/murmurhash3.c" },
   }
 }

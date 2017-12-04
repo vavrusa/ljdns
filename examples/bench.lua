@@ -1,6 +1,5 @@
 #!/usr/bin/env luajit
-local kdns = require('dns')
-local sift, utils = require('dns.sift'), require('dns.utils')
+local sift = require('dns.sift')
 local aio = require('dns.nbio')
 local lmdb_ok, lmdb = pcall(require, 'dns.lmdb')
 local dnssec_ok, dnssec = pcall(require, 'dns.dnssec')
@@ -98,7 +97,7 @@ end
 
 -- Sorted set + binary search
 print('bench: sortedset')
-local set, err, step = bench_sift(sift.set())
+local set, _, step = bench_sift(sift.set())
 bench_sortedset(set, step)
 
 -- LMDB backend
@@ -111,9 +110,10 @@ if lmdb_ok then
 	end
 	S.mkdir(tmpdir, '0755')
 	local env = assert(lmdb.open(tmpdir, 'writemap, mapasync'))
-	local env, db, step = bench_sift(sift.lmdb(env))
-	if env then
-		bench_lmdb(env, db, step)
+	local db
+	set, db, step = bench_sift(sift.lmdb(env))
+	if set then
+		bench_lmdb(set, db, step)
 	end
 	S.util.rm(tmpdir)
 end

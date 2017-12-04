@@ -1,7 +1,6 @@
 local ffi = require('ffi')
 local kdns = require('dns')
 local utils, rrparser = require('dns.utils'), require('dns.rrparser')
-local sift = {}
 
 -- Compile query string/table into filter function
 -- e.g. 'TXT' => filter matching TXT records
@@ -33,7 +32,7 @@ local function makefilter(query)
 		if op == '~=' then opref = 'not ' op = '==' end
 		-- Select left operand
 		if k == 'owner' then
-			local owner, fuzzy = v:match('([^~]+)~?(%d*)')
+			local owner, _ = v:match('([^~]+)~?(%d*)')
 			local meta = 'equals'
 			if owner:sub(1,1) == '*' then
 				owner = owner:sub(3)
@@ -121,7 +120,6 @@ local function sink_lmdb(env, db, txn)
 	if not lmdb_ok then return nil, 'lmdb sink not supported' end
 	if not db then txn, db = assert(env:open()) end
 	local key, val = lmdb.val_t(), lmdb.val_t()
-	local keybuf = ffi.new('char [?]', 512)
 	local ttlbuf = ffi.new('uint32_t [1]')
 	local inserted = 0
 	return function (owner, type, ttl, rdata)
@@ -166,12 +164,12 @@ local function sink_json()
 	end
 end
 
-local function zone(zone, sink, filter, limit)
-	if not zone then return false end
+local function zone(zonefile, sink, filter, limit)
+	if not zonefile then return false end
 	-- Create sink and parser instance
 	if not sink then sink = sink_print() end
 	local parser = assert(rrparser.new())
-	local ok, err = parser:open(zone)
+	local ok, err = parser:open(zonefile)
 	if not ok then
 		return ok, err
 	end

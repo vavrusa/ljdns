@@ -161,7 +161,6 @@ ffi.metatype(sortedset_t, {
 })
 
 -- Wrap scanner context
-local const_char_t = ffi.typeof('const char *')
 local zs_scanner_t = ffi.typeof('struct scanner')
 ffi.metatype( zs_scanner_t, {
 	__gc = function(zs) libzscanner.zs_deinit(zs) end,
@@ -199,7 +198,7 @@ ffi.metatype( zs_scanner_t, {
 			return {owner = ffi.string(zs.r_owner, zs.r_owner_length),
 			        ttl = tonumber(zs.r_ttl),
 			        class = tonumber(zs.r_class),
-			        type = tonumber(zs.r_type), 
+			        type = tonumber(zs.r_type),
 			        rdata = ffi.string(zs.r_data, zs.r_data_length)}
 		end,
 		strerr = function(zs)

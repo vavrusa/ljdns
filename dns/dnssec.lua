@@ -161,7 +161,7 @@ void dnssec_kasp_keystore_free(dnssec_kasp_keystore_t *keystore);
 
 -- Crypto library initialiser/deinitialiser
 lib.dnssec_crypto_init()
-local crypto_init = ffi.gc(ffi.new('dnssec_binary_t'), function ()
+local crypto_init = ffi.gc(ffi.new('dnssec_binary_t'), function () -- luacheck: ignore
 	lib.dnssec_crypto_cleanup()
 end)
 
@@ -257,7 +257,7 @@ local M = {
 -- Metatype for DNSSEC key
 local key_t = ffi.typeof('dnssec_key_t')
 ffi.metatype(key_t, {
-	__new = function (ct)
+	__new = function ()
 		local key = ffi.new('dnssec_key_t *[1]')
 		local ret = lib.dnssec_key_new(key)
 		if ret ~= 0 then return nil end
@@ -394,8 +394,8 @@ ffi.metatype(signer_t, {
 			self:reset()
 			local owner = rr:owner()
 			local rrsig = dns.rrset(owner, dns.type.RRSIG)
-			local incept = incept or os.time()
 			local labels = owner:labels()
+			incept = incept or os.time()
 			if owner:wildcard() then labels = labels - 1 end
 			-- Need to manually fill the RRSIG header
 			-- RFC4034 3.1.  RRSIG RDATA Wire Format
@@ -428,7 +428,7 @@ M.signer = signer_t
 local function init_keystore(kasp, name, backend, config)
 	local ret = lib.dnssec_kasp_keystore_exists(kasp, name)
 	if ret == 0 then return ret end
-	local config = ffi.new('dnssec_kasp_keystore_t', {
+	config = ffi.new('dnssec_kasp_keystore_t', {
 		name or 'default', backend or 'pkcs8', config or 'keys'
 	})
 	local keystore = ffi.new('struct dnssec_keystore *[1]')
@@ -445,7 +445,7 @@ local function keystore_iter(t, i)
 end
 local function keystore_close(t)
 	lib.dnssec_keystore_close(t)
-	lib.dnssec_keystore_deinit(t)	
+	lib.dnssec_keystore_deinit(t)
 end
 
 -- Metatype for KASP keystore
@@ -492,7 +492,6 @@ ffi.metatype(keystore_t, {
 -- way as the libdnssec used primarily for authoritative servers, but reuses the concept.
 -- The keyset points to keystore and policy used for parameters for key generator, and
 -- keeps track of timers and key expiration for automation.
-local keyset_t = ffi.typeof('dnssec_kasp_zone_t')
 
 local function keyset_iter(t, i)
 	if i == nil then return end
@@ -542,7 +541,7 @@ local function keyset_last(keyset, state, now, ksk)
 	local last
 	for _, k in keyset:keys() do
 		if ksk == k.key:ksk() and key_state(k.time, now) == state then
-			if not last or key_newer(last, k) then 
+			if not last or key_newer(last, k) then
 				last = k
 			end
 		end
@@ -565,9 +564,9 @@ local keyset_step = {
 	end,
 	[keyaction.ZSK_PUBLISH] = function (ks, now)
 		now = now or os.time()
-		local zsk, id, time = assert(ks:generate(false, now))
+		local _, _, time = assert(ks:generate(false, now))
 		-- Set as active in the future (maximum)
-		time.publish = now 
+		time.publish = now
 		time.active = 0xffffffff
 		assert(ks:save())
 	end,
@@ -590,7 +589,7 @@ local keyset_step = {
 		-- Update timing
 		retired.time.remove = now
 		assert(ks:save())
-	end,	
+	end,
 }
 
 local keyset_mt = {
@@ -624,7 +623,7 @@ local keyset_mt = {
 			if ret ~= 0 then return nil, strerr(ret) end
 			return true
 		end,
-		add = function (self, key, id, now, init)
+		add = function (self, key, id, now)
 			local keys = lib.dnssec_kasp_zone_get_keys(self.data)
 			if keys == nil then return end
 			-- Build C-world kasp key
@@ -666,7 +665,8 @@ local keyset_mt = {
 			-- Generate a new key and add it to the keyset
 			local key, id = keystore:generate(policy, ksk)
 			if not key then return nil, id end
-			local key, id, time = self:add(key, id, now)
+			local time
+			key, id, time = self:add(key, id, now)
 			if initial then
 				time.active = now
 				time.publish = now
@@ -746,7 +746,7 @@ local function kasp_close(kasp)
 end
 local kasp_t = ffi.typeof('dnssec_kasp_t')
 ffi.metatype(kasp_t, {
-	__new = function (ct, path)
+	__new = function (_, path)
 		local kasp = ffi.new('dnssec_kasp_t *[1]')
 		local ret = lib.dnssec_kasp_init_dir(kasp)
 		if ret ~= 0 then return nil, strerr(ret) end

@@ -127,7 +127,7 @@ void *gnutls_session_get_ptr(gnutls_session_t session);
 int gnutls_server_name_set(gnutls_session_t session, gnutls_server_name_type_t type, const void *name, size_t name_length);
 int gnutls_set_default_priority(gnutls_session_t session);
 int gnutls_credentials_set(gnutls_session_t session, gnutls_credentials_type_t type, void *cred);
-int gnutls_credentials_get(gnutls_session_t session, gnutls_credentials_type_t type, void **cred);                           
+int gnutls_credentials_get(gnutls_session_t session, gnutls_credentials_type_t type, void **cred);
 void gnutls_session_set_verify_cert(gnutls_session_t session, const char *hostname, unsigned flags);
 void gnutls_transport_set_int2(gnutls_session_t session, int r, int s);
 void gnutls_handshake_set_timeout(gnutls_session_t session, unsigned int ms);
@@ -216,10 +216,7 @@ local creds = {open = {}}
 creds.anon = ffi.gc(ffi.new([[ struct {
     gnutls_anon_client_credentials_t client[1];
     gnutls_anon_server_credentials_t server[1];
-}]]), function (p)
-    gnutls.gnutls_anon_free_client_credentials(p.client[0])
-    gnutls.gnutls_anon_free_server_credentials(p.server[0])
-end)
+}]]), function () end)
 gnutls.gnutls_anon_allocate_client_credentials(creds.anon.client)
 gnutls.gnutls_anon_allocate_server_credentials(creds.anon.server)
 gnutls.gnutls_anon_set_server_known_dh_params(creds.anon.server[0], sec_param.MEDIUM)
@@ -290,11 +287,11 @@ local function session(sock, flag, cred)
         end
     else
         -- Allow anonymous authentication if no certificate is passed
-        ret = gnutls.gnutls_priority_set_direct(s.session[0], 'PERFORMANCE:+ANON-ECDH:+ANON-DH', nil)
-        if ret == 0 then
+        gnutls.gnutls_priority_set_direct(s.session[0], 'NORMAL:+ANON-ECDH:+ANON-DH', nil)
+        -- if ret == 0 then
             local anon = flags.CLIENT and creds.anon.client or creds.anon.server
             ret = gnutls.gnutls_credentials_set(s.session[0], crd.ANON, anon[0])
-        end
+        -- end
     end
     if ret < 0 then return nil, toerrstr(ret) end
     return s
@@ -309,7 +306,7 @@ function M.client(sock, cred)
 end
 
 -- Create TLS server from connected socket
-function M.server(sock, cred, key)
+function M.server(sock, cred, _)
     -- Create session
     local s, err = session(sock, flags.SERVER, cred)
     if not s then return nil, err end
