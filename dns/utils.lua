@@ -105,6 +105,7 @@ end
 
 -- Get RDATA set member
 local function rdsetget(rr, n)
+	if not n then n = 0 end
 	assert(n < rr:count())
 	return knot.knot_rdataset_at(rr.rrs, n)
 end
