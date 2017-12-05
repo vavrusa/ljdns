@@ -293,8 +293,8 @@ for i, rr in ipairs(records) do
 	print(rr)
 end
 -- Check EDNS OPT RR
-if pkt.opt ~= nil then
-	local rr = pkt.opt
+if pkt.opt_rr ~= nil then
+	local rr = pkt.opt_rr
 	print(dns.edns.version(rr), dns.edns.dobit(rr))
 	-- Check if it contains EDNS OPT code
 	if dns.edns.has(rr, dns.option.COOKIE) then print('yes, has cookie') end

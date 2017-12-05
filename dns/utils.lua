@@ -94,7 +94,7 @@ utils.n16 = n16
 
 -- Compute RDATA set count
 local function rdsetcount(rr, maxlen)
-	local p, len, count = rr.raw_data.bytes, 0, 0
+	local p, len, count = rr.rrs.data.bytes, 0, 0
 	while len < maxlen do
 		len = len + knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
 		count = count + 1
@@ -104,8 +104,8 @@ end
 
 -- Compute RDATA set length
 local function rdsetlen(rr)
-	local p, len = rr.raw_data.bytes, 0
-	for _ = 1,rr.rdcount do
+	local p, len = rr.rrs.data.bytes, 0
+	for _ = 1,rr:count() do
 		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
 		len = len + rdlen
 	end
@@ -114,8 +114,8 @@ end
 
 -- Get RDATA set member
 local function rdsetget(rr, n)
-	assert(n < rr.rdcount)
-	local p = rr.raw_data.bytes
+	assert(n < rr:count())
+	local p = rr.rrs.data.bytes
 	for _ = 1,n do
 		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p))
 		p = p + rdlen
@@ -125,7 +125,7 @@ end
 
 local function rdataiter(rr, it)
 	it[1] = it[1] + 1
-	if it[1] < rr.rdcount then
+	if it[1] < rr:count() then
 		local rdata = ffi.cast('knot_rdata_t *', it[2])
 		local rdlen = knot.knot_rdata_array_size(#rdata)
 		it[2] = it[2] + rdlen

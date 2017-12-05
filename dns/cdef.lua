@@ -6,6 +6,7 @@ char *strdup(const char *s);
 void *calloc(size_t nmemb, size_t size);
 void free(void *ptr);
 int memcmp(const void *a, const void *b, size_t len);
+
 /*
  * Data structures
  */
@@ -24,14 +25,16 @@ typedef struct {
 typedef int knot_section_t; /* Do not touch */
 typedef void knot_rrinfo_t; /* Do not touch */
 typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
+typedef struct knot_rdataset knot_rdataset_t;
+struct knot_rdataset {
+	uint16_t rr_count;
+	knot_rdata_t *data;
+};
 typedef struct knot_rrset {
-	knot_dname_t *raw_owner; /* This is private because GC-unaware */
-	uint16_t raw_type;
-	uint16_t raw_class;
-	uint32_t __pad__;        /* Padding because libknot uses nested structure */
-	uint16_t rdcount;
-	knot_rdata_t *raw_data;
-	void *additional;
+	knot_dname_t *_owner; /* This is private because GC-unaware */
+	uint16_t _type;
+	uint16_t rclass;
+	knot_rdataset_t rrs;
 } knot_rrset_t;
 typedef struct {
 	struct knot_pkt *pkt;
@@ -47,8 +50,8 @@ typedef struct {
 	uint16_t qname_size;
 	uint16_t rrset_count;
 	uint16_t flags;
-	knot_rrset_t *opt;
-	knot_rrset_t *tsig;
+	knot_rrset_t *opt_rr;
+	knot_rrset_t *tsig_rr;
 	struct {
 		uint8_t *pos;
 		size_t len;
@@ -69,12 +72,6 @@ typedef struct {
 	knot_dname_t *name;
 	dnssec_binary_t secret;
 } knot_tsig_key_t;
-typedef struct {
-	knot_tsig_key_t key;
-	size_t digest_len;
-	uint64_t last_signed;
-	uint8_t digest[64]; /* Max size of the HMAC-SHA512 */
-} tsig_t;
 /* descriptors */
 const char *knot_strerror(int code);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
