@@ -17,7 +17,7 @@ all: check
 #check: $(addsuffix .test,$(OBJS))
 check:
 	@echo "[*] static analysis"
-	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua
+	@luacheck --codes --formatter TAP . --exclude-files *.test.lua config.lua dns.lua
 	@echo "[*] unit tests"
 	@busted --lua=$(LUA) -o TAP
 clean:

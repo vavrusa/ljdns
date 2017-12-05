@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
-local kdns = require('dns')
+local nbio = require('dns.nbio')
 local sift = require('dns.sift')
 -- Parameters
 local function help()
@@ -49,7 +49,7 @@ if sort then
 	sink = sift.set()
 end
 -- Filter stream
-local elapsed = timeit and kdns.io.now()
+local elapsed = timeit and nbio.now()
 local cap, err = sift.zone(zone, sink, filter, limit)
 if not cap then
 	error(err)
@@ -59,7 +59,7 @@ if timeit then
 	if     type(cap) == 'number' then nrr = cap
 	elseif type(cap) == 'table'  then nrr = #cap
 	end
-	elapsed = kdns.io.now() - elapsed
+	elapsed = nbio.now() - elapsed
 	io.stderr:write(string.format('; parsed in %.02f msec (%d records)\n', elapsed * 1000.0, nrr))
 end
 -- Sorted output

@@ -1,9 +1,6 @@
 local dns = require('dns')
 local nb = require('dns.nbio')
 
--- Enable trace stitching
-require('jit.opt').start('minstitch=5')
-
 -- Parse config options
 local tx, rx = 0, 0
 local udp = false

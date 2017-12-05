@@ -157,7 +157,7 @@ Adding new dissectors is easy thanks to duck-typing in Lua.
 -- Install new dissector
 dns.rdata.cname_target = function (rdata)
 	rdata = ffi.cast('char *', rdata)
-	return dns.dname(rdata, utils.dnamelenraw(rdata))
+	return dns.dname(rdata, utils.dnamelen(rdata))
 end
 -- Dissect CNAME target
 local rdata = dns.rdata.parse('CNAME next-name.')
@@ -391,66 +391,6 @@ local owner = dns.dname('\7example')
 local nsec = dnssec.denial(owner, dns.type.A)
 -- Names that do not exist are simplified, as only NSEC and RRSIG can exist
 local nsec = dnssec.denial(owner, dns.type.A, true)
-```
-
-### DNSSEC KASP
-
-The difficult thing about DNSSEC is key management. At each point in time there must be a trust chain from trust anchor to record signatures with the respect to DNS caching. To ensure this, an operator must perform a "key rollover" in which the current signing key is replaced with a new one in several steps. The library provides an API to automate this process by defining and enforcing key and signing policies (KASP).
-
-The KASP information is stored on disk and is persistent. It stores information about key timing and references to keystores, but not private key information.
-
-```lua
--- Create a new KASP
-local kasp = dnssec.kasp('/var/kasp')
--- Create a signing policy
-local policy = kasp:policy('ecdsa', {
-	algorithm = 'ecdsa_p256_sha256',
-})
--- Create a keyset with name 'example'
-local keyset = kasp:keyset('example', {
-	policy = 'ecdsa',
-})
--- Perform key rollover in coroutine
-go(function ()
-	while true do
-		local now = os.time()
-		local time, action = keyset:plan(now)
-		print('next action at', time, dnssec.tostring.action[action])
-		go.block(0, time - now) -- Wait until the event time
-		keyset:action(action, time)
-	end
-end)
--- Use active key for signing records
-local zsk = keyset:zsk()
-local signer, err = dnssec.signer(key)
-```
-
-You can recover or change signing policy and keysets if you have created them beforehand. The information in KASP is persistent, so you can continue rollover even if you restart the application.
-
-```lua
--- Open KASP and recover keyset
-local kasp = dnssec.kasp('/var/kasp')
-local keyset = kasp:keyset('example')
-```
-
-You can also change policy defaults, or use different PKCS8/PKCS11 key storage.
-
-```lua
--- Open PKCS11 keystore (softhsm)
-local keystore, err = kasp:keystore('softhsm', {
-	backend = 'pkcs11',
-	config = 'pkcs11:token=dnssec;pin-value=1234 /usr/local/lib/softhsm2.so'
-})
--- Generate some keys manually with existing policy
-local ksk, key_id = keys:generate(policy, true)
-local keyset, err = kasp:keyset('example', {
-	policy = 'ecdsa',
-})
--- Set policy to use this PKCS11 keystore
-local policy = kasp:policy('example_pkcs11', {
-	algorithm = 'ecdsa_p256_sha256',
-	keystore = 'softhsm',
-})
 ```
 
 ### Caveats

@@ -10,7 +10,7 @@ int memcmp(const void *a, const void *b, size_t len);
 /*
  * Data structures
  */
-typedef struct { uint8_t bytes[?]; } knot_rdata_t;
+typedef uint8_t knot_rdata_t;
 typedef struct {
 	bool	wrap;
 	bool	show_class;
@@ -76,15 +76,15 @@ typedef struct {
 const char *knot_strerror(int code);
 int knot_rrtype_to_string(uint16_t rrtype, char *out, size_t out_len);
 /* domain names */
-int knot_dname_size(const uint8_t *name);
-int knot_dname_cmp(const uint8_t *d1, const uint8_t *d2);
+int knot_dname_size(const knot_dname_t *name);
+int knot_dname_cmp(const knot_dname_t *d1, const knot_dname_t *d2);
 knot_dname_t *knot_dname_from_str(uint8_t *dst, const char *name, size_t maxlen);
-char *knot_dname_to_str(char *dst, const uint8_t *name, size_t maxlen);
-int knot_dname_to_lower(uint8_t *name);
-int knot_dname_labels(const uint8_t *name, const uint8_t *pkt);
-bool knot_dname_in(const uint8_t *domain, const uint8_t *sub);
+char *knot_dname_to_str(char *dst, const knot_dname_t *name, size_t maxlen);
+int knot_dname_to_lower(knot_dname_t *name);
+int knot_dname_labels(const knot_dname_t *name, const knot_dname_t *pkt);
+bool knot_dname_in(const knot_dname_t *domain, const knot_dname_t *sub);
 knot_dname_t *knot_dname_copy(const void *name, void /* mm_ctx_t */ *mm);
-int knot_dname_unpack(uint8_t *dst, const uint8_t *src, size_t maxlen, const uint8_t *pkt);
+int knot_dname_unpack(uint8_t *dst, const knot_dname_t *src, size_t maxlen, const uint8_t *pkt);
 /* resource records */
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
 uint16_t knot_rdata_rdlen(void *rr);
@@ -92,6 +92,7 @@ uint8_t *knot_rdata_data(void *rr);
 size_t knot_rdata_array_size(uint16_t size);
 uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
+knot_rdata_t *knot_rdataset_at(const knot_rdataset_t *rrs, size_t pos);
 int knot_rrset_txt_dump(const knot_rrset_t *rrset, char **dst, size_t *maxlen, const knot_dump_style_t *style);
 int knot_rrset_txt_dump_data(const knot_rrset_t *rrset, size_t pos, char *dst, size_t maxlen, const knot_dump_style_t *style);
 int knot_rrset_add_rdata(knot_rrset_t *rrset, const uint8_t *rdata, const uint16_t size, const uint32_t ttl, void *mm);

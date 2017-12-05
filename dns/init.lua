@@ -9,7 +9,6 @@ local knot = utils.knot
 
 -- Basic types
 local void_p = ffi.typeof('void *')
-local u8_p = ffi.typeof('uint8_t *')
 local u16_p = ffi.typeof('uint16_t *')
 local u32_p = ffi.typeof('uint32_t *')
 
@@ -154,13 +153,14 @@ end
 -- Metatype for domain name
 local dname_buf = ffi.new('char [?]', 256)
 local knot_dname_t = ffi.typeof('knot_dname_t')
+local knot_dname_p = ffi.typeof('knot_dname_t *')
 ffi.metatype( knot_dname_t, {
 	__new = function (ct, name, len)
 		assert(name ~= nil)
 		len = len or #name
 		local dname = ffi.new(ct, len + 1)
 		-- Check input wire format, malformed names must not be passed through this point
-		if knot.knot_dname_unpack(dname.bytes, name, len + 1, nil) <= 0 then
+		if knot.knot_dname_unpack(dname.bytes, ffi.cast(knot_dname_p, name), len + 1, nil) <= 0 then
 			dname = nil
 		end
 		return dname
@@ -206,28 +206,25 @@ ffi.metatype( knot_dname_t, {
 		end,
 		lower = function(dname) -- Copy to make sure it's safely mutable
 			local copy = dname:copy()
-			knot.knot_dname_to_lower(copy.bytes)
+			knot.knot_dname_to_lower(copy)
 			return copy
 		end,
 		len = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
-			return (utils.dnamelen(dname.bytes))
+			return (utils.dnamelen(dname))
 		end,
 		labels = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
-			return (knot.knot_dname_labels(dname.bytes, nil))
+			return (knot.knot_dname_labels(dname, nil))
 		end,
 		within = function(dname, parent)
 			assert(ffi.istype(knot_dname_t, dname))
 			assert(parent ~= nil)
-			if ffi.istype(knot_dname_t, parent) then parent = parent.bytes end
-			return (knot.knot_dname_in(ffi.cast(u8_p, parent), dname.bytes) == true)
+			if type(parent) == 'string' then parent = knot_dname_t(parent) end
+			return (knot.knot_dname_in(parent, dname) == true)
 		end,
 		wildcard = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
 			return dname.bytes[0] == 1 and dname.bytes[1] == 42 -- '\1*'
 		end,
 		parentof = function(dname, child)
@@ -237,17 +234,14 @@ ffi.metatype( knot_dname_t, {
 		end,
 		towire = function(dname, len)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
 			return (ffi.string(dname.bytes, len or dname:len()))
 		end,
 		tostring = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
-			return (ffi.string(knot.knot_dname_to_str(dname_buf, dname.bytes, 255)))
+			return (ffi.string(knot.knot_dname_to_str(dname_buf, dname, 255)))
 		end,
 		split = function(dname)
 			assert(ffi.istype(knot_dname_t, dname))
-			assert(dname.bytes ~= nil)
 			local t, p, i = {}, dname.bytes, 0
 			while p[i] ~= 0 do
 				table.insert(t, ffi.string(p + i + 1, p[i]))
@@ -300,41 +294,26 @@ local rdata = {
 	end,
 	-- RDATA disection routines (extensible)
 	soa_primary_ns = function(rdata)
-		rdata = ffi.cast(u8_p, rdata)
 		return knot_dname_t(rdata, utils.dnamelen(rdata))
 	end,
 	soa_mailbox = function(rdata)
-		rdata = ffi.cast(u8_p, rdata)
 		rdata = rdata + utils.dnamelen(rdata) -- Primary NS
 		return knot_dname_t(rdata, utils.dnamelen(rdata))
 	end,
 	soa_serial = function(rdata)
-		rdata = ffi.cast(u8_p, rdata)
 		rdata = rdata + utils.dnamelen(rdata) -- Primary NS
 		rdata = rdata + utils.dnamelen(rdata) -- Mailbox
 		return n32(ffi.cast(u32_p, rdata)[0])
 	end,
 	soa_minttl = function(rdata)
-		rdata = ffi.cast(u8_p, rdata)
 		rdata = rdata + utils.dnamelen(rdata) -- Primary NS
 		rdata = rdata + utils.dnamelen(rdata) -- Mailbox
 		rdata = rdata + 4 * ffi.sizeof('uint32_t')
 		return n32(ffi.cast(u32_p, rdata)[0])
 	end,
+	len = utils.rdlen,
+	data = utils.rddata,
 }
-
--- Metatype for RDATA
-local knot_rdata_t = ffi.typeof('knot_rdata_t')
-ffi.metatype( knot_rdata_t, {
-	__tostring = function (self)
-		return ffi.string(self:data(), self:len())
-	end,
-	__len = function (self) return self:len() end,
-	__index = {
-		len = knot.knot_rdata_rdlen,
-		data = knot.knot_rdata_data,
-	}
-})
 
 -- Metatype for RR set
 local rrset_buflen = (64 + 1) * 1024
@@ -354,7 +333,7 @@ ffi.metatype( knot_rrset_t, {
 	end,
 	__lt = function (a, b) return a:lt(a, b) end,
 	__tostring = function(rr) return rr:tostring() end,
-	__ipairs = function (self) return utils.rdataiter, self, {-1,self.rrs.data.bytes} end,
+	__ipairs = function (self) return utils.rdataiter, self, {-1, self.rrs.data} end,
 	__index = {
 		lt = function (a, b)
 			assert(ffi.istype(knot_rrset_t, a))
@@ -381,7 +360,7 @@ ffi.metatype( knot_rrset_t, {
 		rdata = function(rr, i)
 			assert(ffi.istype(knot_rrset_t, rr))
 			local data = utils.rdsetget(rr, i)
-			return ffi.string(knot.knot_rdata_data(data), knot.knot_rdata_rdlen(data))
+			return ffi.string(utils.rddata(data), utils.rdlen(data))
 		end,
 		count = function (rr)
 			return tonumber(rr.rrs.rr_count)
@@ -440,8 +419,7 @@ ffi.metatype( knot_rrset_t, {
 			assert(ffi.istype(knot_rrset_t, rr))
 			assert(ffi.istype(knot_rrset_t, next))
 			for _, data in ipairs(next) do
-				local rdlen = knot.knot_rdata_rdlen(data)
-				assert(rr:add(knot.knot_rdata_data(data), rr:ttl(), rdlen))
+				assert(rr:add(utils.rddata(data), rr:ttl(), utils.rdlen(data)))
 			end
 		end,
 		clear = function (rr)

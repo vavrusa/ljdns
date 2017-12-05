@@ -107,8 +107,8 @@ local function sink_set()
 		if not owner then return capture, inserted end
 		-- We'll initialize pre-allocated block to save some ticks
 		local rrset = capture:newrr(true)
-		rrset.raw_owner = nil
-		rrset.raw_data = nil
+		rrset._owner = nil
+		rrset.rrs.data = nil
 		rrset:init(owner, type):add(rdata, ttl)
 		inserted = inserted + 1
 		return true

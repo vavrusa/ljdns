@@ -62,7 +62,8 @@ utils.knot_version = knot_version
 -- Load cdefs for given library version
 require(_G['libknot_CDEFS'] or 'dns.cdef')
 
--- FFI + C code
+-- Check whether the helper C library is built
+-- It provides several optimized functions helpers
 local has_cutil, cutil = pcall(ffi.load, package.searchpath('kdns_clib', package.cpath))
 if has_cutil then
 	ffi.cdef[[
@@ -92,20 +93,10 @@ end
 utils.n32 = n32
 utils.n16 = n16
 
--- Compute RDATA set count
-local function rdsetcount(rr, maxlen)
-	local p, len, count = rr.rrs.data.bytes, 0, 0
-	while len < maxlen do
-		len = len + knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
-		count = count + 1
-	end
-	return count
-end
-
 -- Compute RDATA set length
 local function rdsetlen(rr)
-	local p, len = rr.rrs.data.bytes, 0
-	for _ = 1,rr:count() do
+	local p, len = rr.rrs.data, 0
+	for _ = 1, rr:count() do
 		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
 		len = len + rdlen
 	end
@@ -115,27 +106,24 @@ end
 -- Get RDATA set member
 local function rdsetget(rr, n)
 	assert(n < rr:count())
-	local p = rr.rrs.data.bytes
-	for _ = 1,n do
-		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p))
-		p = p + rdlen
-	end
-	return ffi.cast('knot_rdata_t *', p)
+	return knot.knot_rdataset_at(rr.rrs, n)
 end
 
 local function rdataiter(rr, it)
+	-- Iterator is: { position, knot_rdata_t* }
 	it[1] = it[1] + 1
 	if it[1] < rr:count() then
-		local rdata = ffi.cast('knot_rdata_t *', it[2])
-		local rdlen = knot.knot_rdata_array_size(#rdata)
-		it[2] = it[2] + rdlen
+		local rdata = it[2]
+		local rdlen = knot.knot_rdata_rdlen(rdata)
+		it[2] = it[2] + knot.knot_rdata_array_size(rdlen)
 		return it, rdata
 	end
 end
 
 -- Domain name wire length
+local knot_dname_p = ffi.typeof('knot_dname_t *')
 local function dnamelen(dname)
-	return (knot.knot_dname_size(dname))
+	return (knot.knot_dname_size(ffi.cast(knot_dname_p, dname)))
 end
 
 -- Canonically compare domain wire name / keys
@@ -143,7 +131,7 @@ local function dnamecmp(lhs, rhs)
 	if cutil then
 		return (cutil.dnamecmp(lhs.bytes, rhs.bytes))
 	end
-	return (knot.knot_dname_cmp(lhs.bytes, rhs.bytes))
+	return (knot.knot_dname_cmp(lhs, rhs))
 end
 
 -- Wire writer
@@ -217,7 +205,6 @@ utils.wire_reader=wire_reader
 -- Export low level accessors
 utils.rdlen = knot.knot_rdata_rdlen
 utils.rddata = knot.knot_rdata_data
-utils.rdsetcount = rdsetcount
 utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
 utils.rdataiter = rdataiter
