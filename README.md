@@ -304,26 +304,6 @@ if pkt.opt_rr ~= nil then
 end
 ```
 
-### TSIG
-
-TSIG is not a property of packet but a pairing of TSIG key with a signer state. It has two operations - *sign()*, and *verify()* and keeps digest state between requests. This means that if you verify a query and use the same TSIG for signing response, it will remember the query digest for signing.
-
-```lua
--- Create TSIG signer from string, same format as ISC dig
-local tsig_client = dns.tsig('keyname:hmac-md5:Wg==')
-local tsig_server = tsig_client:copy()
--- Sign packet, TSIG remembers 'last signed' and query digest
-assert(tsig_client:sign(pkt))
--- Authenticate query
-assert(tsig_server:verify(pkt))
--- Create answer and sign it
-local answer = pkt:copy()
-answer:qr(true)
-assert(tsig_server:sign(answer))
--- Verify by client
-assert(tsig_client:verify(answer))
-```
-
 ### DNSSEC
 
 The library provides an API for online signing and verification of records. For that it needs zone signing key (ZSK) and preferably key signing key (KSK) if you don't plan to use the key forever. KSK can be the same key as ZSK, but that will make rollovers more error prone and complicated. You can load private keys from PEM, and public keys (for verification) from either DNSKEY RDATA or PEM.
@@ -478,6 +458,25 @@ if not set then error(err) end
 -- Load text zone into LMDB
 local env = assert(lmdb.open('.', 'writemap, mapasync'))
 local set, inserted, db = sift.zone(zone, sift.lmdb(env))
+```
+
+### Working with name set
+
+The name set is a flat memory domain name set that is sorted in terms of [RFC4034](https://tools.ietf.org/html/rfc4034#section-6.1) canonical name ordering and may be used for DNSSEC purposes. The search algorithm is a binary search to keep things simple, while still getting a decent performance.
+
+```lua
+-- Sort the set captured from previous example
+local set, err = sift.domains('domains.list', sift.nameset())
+-- Search a name, the result is a lesser or equal name
+local query = dns.dname('\5query\3com')
+local res = set:search(query)
+if res and query:equals(res) then
+	print('result:', res)
+end
+-- Fetch a searcher closure specialized to current set length
+-- This allows a faster search if the set size doesn't change
+local searcher = set:searcher()
+local res = searcher(query)
 ```
 
 ### Working with sorted set

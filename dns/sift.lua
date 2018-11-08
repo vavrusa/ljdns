@@ -104,12 +104,28 @@ local function sink_set()
 	local capture = rrparser.set()
 	local inserted = 0
 	return function (owner, type, ttl, rdata)
-		if not owner then return capture, inserted end
+		if not owner then
+			return capture, inserted
+		end
 		-- We'll initialize pre-allocated block to save some ticks
 		local rrset = capture:newrr(true)
 		rrset._owner = nil
-		rrset.rrs.data = nil
+		rrset.rrs.rdata = nil
 		rrset:init(owner, type):add(rdata, ttl)
+		inserted = inserted + 1
+		return true
+	end
+end
+
+local function sink_nameset()
+	local capture = rrparser.nameset()
+	local inserted = 0
+	return function (owner, _, _, _)
+		if not owner then
+			capture:sort()
+			return capture, inserted
+		end
+		capture:put(owner)
 		inserted = inserted + 1
 		return true
 	end
@@ -199,12 +215,43 @@ local function zone(zonefile, sink, filter, limit)
 	return sink(nil)
 end
 
+local function domains(zonefile, sink, filter, limit)
+	if not zonefile then return false end
+	-- Create sink and parser instance
+	if not sink then sink = sink_print() end
+	local last_name = nil
+    -- read the lines in table 'lines'
+    for line in io.lines(zonefile) do
+		local owner_dname = kdns.dname.parse(line:sub(1, #line-1))
+		-- When limit is placed on the number of results, continue matching
+		-- results only as long as owner doesn't change, after that, stop
+		if last_name then
+			if not last_name:equals(owner_dname) then break end
+		end
+		-- Match current record against filter
+		if not filter or filter(owner_dname, kdns.type.A, 0, '\0\0\0\0') then
+			-- When limit is placed on the number of results, continue matching
+			-- results only as long as owner doesn't change, after that, stop
+			if not last_name and limit then
+				limit = limit - 1
+				if limit <= 0 then last_name = owner_dname:copy() end
+			end
+			if not sink(owner_dname, kdns.type.A, 0, '\0\0\0\0') then
+				break
+			end
+		end
+	end
+	return sink(nil)
+end
+
 return {
 	zone = zone,
+	domains = domains,
 	makefilter = makefilter,
 	printer = sink_print,
 	jsonify = sink_json,
 	table = sink_table,
 	set = sink_set,
 	lmdb = sink_lmdb,
+	nameset = sink_nameset,
 }

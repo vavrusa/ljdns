@@ -3,7 +3,8 @@ local S = require('syscall')
 -- Pack table of bytes to string
 describe('dnssec', function()
 	local dns = require('dns')
-	local dnssec = require('dns.dnssec')
+	local ok, dnssec = pcall(require, 'dns.dnssec')
+	if not ok then print('skipping dnssec tests:', dnssec) return end
 	local tmpdir = nil
 
 	setup(function()

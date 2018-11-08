@@ -53,7 +53,7 @@ function utils.addrparse(s)
 end
 
 -- Use explicit library or search in the library load path
-local knot, knot_version = utils.clib('libknot', {5, 6, 7})
+local knot, knot_version = utils.clib('libknot', {8})
 
 -- Export library
 utils.knot = knot
@@ -93,11 +93,15 @@ end
 utils.n32 = n32
 utils.n16 = n16
 
+local function rdata_array_size(len)
+	return ffi.sizeof('uint16_t') + len + bit.band(len, 1)
+end
+
 -- Compute RDATA set length
 local function rdsetlen(rr)
-	local p, len = rr.rrs.data, 0
+	local p, len = rr.rrs.rdata, 0
 	for _ = 1, rr:count() do
-		local rdlen = knot.knot_rdata_array_size(knot.knot_rdata_rdlen(p + len))
+		local rdlen = rdata_array_size((p + len).len)
 		len = len + rdlen
 	end
 	return len
@@ -115,8 +119,7 @@ local function rdataiter(rr, it)
 	it[1] = it[1] + 1
 	if it[1] < rr:count() then
 		local rdata = it[2]
-		local rdlen = knot.knot_rdata_rdlen(rdata)
-		it[2] = it[2] + knot.knot_rdata_array_size(rdlen)
+		it[2] = it[2] + rdata_array_size(rdata.len)
 		return it, rdata
 	end
 end
@@ -204,8 +207,6 @@ end
 utils.wire_reader=wire_reader
 
 -- Export low level accessors
-utils.rdlen = knot.knot_rdata_rdlen
-utils.rddata = knot.knot_rdata_data
 utils.rdsetlen = rdsetlen
 utils.rdsetget = rdsetget
 utils.rdataiter = rdataiter
@@ -273,13 +274,13 @@ function utils.sort(array, size)
 	end
 end
 
-local function bsearch(array, len, owner, steps)
+local function bsearch(array, len, owner, steps, transform)
 	-- Number of steps is specialized, this allows unrolling
 	if not steps then steps = math.log(len, 2) end
 	local low = 0
 	for _ = 1, steps do
 		len = rshift(len, 1)
-		local r1 = dnamecmp(array[low + len]:owner(), owner)
+		local r1 = dnamecmp(transform(array[low + len]), owner)
 		if     r1  < 0 then low = low + len + 1
 		elseif r1 == 0 then return array[low + len]
 		end
@@ -288,11 +289,11 @@ local function bsearch(array, len, owner, steps)
 end
 
 -- Binary search closure specialized for given array size
-local function bsearcher(array, len)
+local function bsearcher(array, len, transform)
 	-- Number of steps can be precomputed
 	local steps = math.log(len, 2)
 	return function (owner)
-		return bsearch(array, len, owner, steps)
+		return bsearch(array, len, owner, steps, transform)
 	end
 	-- Generate force unrolled binary search for this table length
 	-- local code = [[

@@ -10,7 +10,10 @@ int memcmp(const void *a, const void *b, size_t len);
 /*
  * Data structures
  */
-typedef uint8_t knot_rdata_t;
+ typedef struct {
+	uint16_t len;
+	uint8_t data[];
+} knot_rdata_t;
 typedef struct {
 	bool	wrap;
 	bool	show_class;
@@ -25,16 +28,18 @@ typedef struct {
 typedef int knot_section_t; /* Do not touch */
 typedef void knot_rrinfo_t; /* Do not touch */
 typedef struct knot_dname { uint8_t bytes[?]; } knot_dname_t;
-typedef struct knot_rdataset knot_rdataset_t;
-struct knot_rdataset {
-	uint16_t rr_count;
-	knot_rdata_t *data;
-};
-typedef struct knot_rrset {
-	knot_dname_t *_owner; /* This is private because GC-unaware */
-	uint16_t _type;
-	uint16_t rclass;
-	knot_rdataset_t rrs;
+typedef struct {
+	uint16_t count;      /*!< \brief Count of RRs stored in the structure. */
+	knot_rdata_t *rdata; /*!< \brief Serialized rdata, canonically sorted. */
+} knot_rdataset_t;
+typedef struct {
+	knot_dname_t *_owner;  /*!< Domain name being the owner of the RRSet. */
+	uint32_t _ttl;         /*!< TTL of the RRset. */
+	uint16_t _type;        /*!< TYPE of the RRset. */
+	uint16_t rclass;      /*!< CLASS of the RRSet. */
+	knot_rdataset_t rrs;  /*!< RRSet's RRs */
+	/* Optional fields. */
+	void *additional;     /*!< Additional records. */
 } knot_rrset_t;
 typedef struct {
 	struct knot_pkt *pkt;
@@ -87,8 +92,6 @@ knot_dname_t *knot_dname_copy(const void *name, void /* mm_ctx_t */ *mm);
 int knot_dname_unpack(uint8_t *dst, const knot_dname_t *src, size_t maxlen, const uint8_t *pkt);
 /* resource records */
 extern const knot_dump_style_t KNOT_DUMP_STYLE_DEFAULT;
-uint16_t knot_rdata_rdlen(void *rr);
-uint8_t *knot_rdata_data(void *rr);
 size_t knot_rdata_array_size(uint16_t size);
 uint32_t knot_rdata_ttl(const knot_rdata_t *rr);
 void knot_rdata_set_ttl(knot_rdata_t *rr, uint32_t ttl);
@@ -108,20 +111,19 @@ void knot_edns_set_ext_rcode(knot_rrset_t *opt_rr, uint8_t ext_rcode);
 uint8_t knot_edns_get_ext_rcode(const knot_rrset_t *opt_rr);
 /* packet */
 knot_dname_t *knot_pkt_qname(const knot_pkt_t *pkt);
-uint16_t knot_pkt_qtype(const knot_pkt_t *pkt);
 uint16_t knot_pkt_qclass(const knot_pkt_t *pkt);
 int knot_pkt_begin(knot_pkt_t *pkt, int section_id);
 const knot_rrset_t *knot_pkt_rr(const knot_pktsection_t *section, uint16_t i);
 const knot_pktsection_t *knot_pkt_section(const knot_pkt_t *pkt, knot_section_t section_id);
 knot_pkt_t *knot_pkt_new(void *wire, uint16_t len, /* mm_ctx_t */ void *mm);
-int knot_pkt_put(knot_pkt_t *pkt, uint16_t compr_hint, const knot_rrset_t *rr, uint16_t flags);
+int knot_pkt_put_rotate(knot_pkt_t *pkt, uint16_t compr_hint, const knot_rrset_t *rr, uint16_t rotate, uint16_t flags);
 int knot_pkt_put_question(knot_pkt_t *pkt, const knot_dname_t *qname,
                           uint16_t qclass, uint16_t qtype);
 int knot_pkt_parse(knot_pkt_t *pkt, unsigned flags);
 int knot_pkt_parse_section(knot_pkt_t *pkt, unsigned flags);
 int knot_pkt_parse_question(knot_pkt_t *pkt);
 void knot_pkt_clear(knot_pkt_t *pkt);
-void knot_pkt_free(knot_pkt_t **pkt);
+void knot_pkt_free(knot_pkt_t *pkt);
 /* tsig */
 int knot_tsig_key_init_str(knot_tsig_key_t *key, const char *params);
 int knot_tsig_key_init_file(knot_tsig_key_t *key, const char *filename);

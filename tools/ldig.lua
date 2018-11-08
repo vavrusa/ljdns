@@ -21,7 +21,6 @@ local k = 1 while k <= #arg do
 	elseif v == '-' then multi = true
 	elseif v == '-f' then short, k = arg[k + 1], k + 1
 	elseif v == '-p' then port, k = tonumber(arg[k + 1]), k + 1
-	elseif v == '-y' then key, k = dns.tsig(arg[k + 1]), k + 1
 	elseif v == '-x' then
 		v, k = arg[k + 1], k + 1
 		qtype, qname = dns.type.PTR, ''
@@ -62,7 +61,6 @@ local k = 1 while k <= #arg do
 		print(string.format('Usage: %s [options] [@server] [type] [class] [domain]', arg[0]))
 		print('Options:')
 		print('\t-p <num>  server port number (default: 53, 853 for +tls)')
-		print('\t-y <tsig> use TSIG key (default: none, example: "testkey:hmac-md5:Wg==")')
 		print('\t-x <ip>   do a reverse lookup')
 		print('\t-f json   return DNS response as JSON')
 		print('\t+tcp      use TCP for transport')
@@ -231,16 +229,12 @@ assert(nb.go(function()
 	for _=1,#queries do
 	local answer = dns.packet(65535)
 	local rcvd = recv(sock, answer)
-	local nbytes, npkts, tsig_ok, soa = 0, 0, true, nil
+	local nbytes, npkts, soa = 0, 0, nil
 	while rcvd and rcvd > 0 do
 		answer.size = rcvd
 		if not answer:parse() then
 			print(dns.hexdump(answer:towire()))
 			error('; MALFORMED MESSAGE')
-		end
-		if key ~= nil and not key:verify(answer) then
-			tsig_ok = false
-			break
 		end
 		-- Print packet
 		local res = answer:tostring(short or npkts > 0)
@@ -275,7 +269,6 @@ assert(nb.go(function()
 		print(string.format(';; SERVER: %s#%d', host, port))
 		print(string.format(';; WHEN: %s', os.date()))
 		print(string.format(';; MSG SIZE  rcvd: %d count: %d', nbytes, npkts))
-		if not tsig_ok then print(string.format(';; WARNING -- Some TSIG could not be validated')) end
 	end
 	end
 end))
